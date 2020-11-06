@@ -1,0 +1,6 @@
+blinker.cpp
+blinker_tb
+*.vcd
+*.gtkw
+build/*
+__pycache__/*
