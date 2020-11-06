@@ -1,4 +1,4 @@
-from ledpanel import LEDBlinker, LEDForward
+from ledpanel import PanelDriver
 from nmigen import *
 from nmigen.build import *
 from nmigen.vendor.lattice_ice40 import *
@@ -7,6 +7,16 @@ import argparse
 import os
 import subprocess
 
+def LEDPanelPModResource(*args, conn0, conn1):
+    io = []
+    io.append(Subsignal("rgb0", Pins("1 2 3", dir="o", conn=conn0, assert_width=3)))
+    io.append(Subsignal("rgb1", Pins("7 8 9", dir="o", conn=conn0, assert_width=3)))
+    io.append(Subsignal("addr", Pins("10 4 3 2 1", dir="o", conn=conn1, assert_width=5)))
+    io.append(Subsignal("blank", Pins("7", dir="o", conn=conn1, assert_width=1)))
+    io.append(Subsignal("latch", Pins("8", dir="o", conn=conn1, assert_width=1)))
+    io.append(Subsignal("sclk", Pins("9", dir="o", conn=conn1, assert_width=1)))
+
+    return Resource.family(*args, default_name="led_panel", ios=io)
 
 class ICEBreakerPlatformCustom(LatticeICE40Platform):
     device      = "iCE40UP5K"
@@ -65,6 +75,11 @@ class ICEBreakerPlatformCustom(LatticeICE40Platform):
                          attrs=Attrs(IO_STANDARD="SB_LVCMOS")),
     ]
 
+    # resource collection for the LED panel PMOD
+    led_panel_pmod = [
+        LEDPanelPModResource(0, conn0=("pmod", 0), conn1=("pmod", 1))
+    ]
+
     def toolchain_program(self, products, name):
         iceprog = os.environ.get("ICEPROG", "iceprog")
         with products.extract("{}.bin".format(name)) as bitstream_filename:
@@ -72,18 +87,19 @@ class ICEBreakerPlatformCustom(LatticeICE40Platform):
 
 
 class BoardMapping(Elaboratable):
-    def __init__(self, blinker):
-        self.blinker = blinker
-        self.fwd = LEDForward()
+    def __init__(self):
+        pass
 
     def elaborate(self, platform):
         m = Module()
 
-        led = platform.request("led")
-        rgb_led = platform.request("rgb_led")
+        panel = platform.request('led_panel', 0, xdr={
+            'sclk': 2,
+            'latch': 2,
+            'blank': 2,
+        })
 
-        m.d.comb += led.eq(self.blinker.o) # led.eq(self.blinker.o)
-        m.d.comb += rgb_led.eq(self.blinker.o)
+        driver = PanelDriver(1, 30e6)
 
         cd_hsclock = ClockDomain()
         m.domains += cd_hsclock
@@ -106,15 +122,21 @@ class BoardMapping(Elaboratable):
 
         m.d.comb += cd_hsclock.rst.eq(ResetSignal("sync") & ~hsclock_lock)
 
-        buttons = Cat(platform.request("button", 1), platform.request("button", 2), platform.request("button", 3))
-        leds = Cat(platform.request("led", 3), platform.request("led", 2), platform.request("led", 4))
+        m.d.comb += [
+            panel.rgb0.eq(driver.o_rgb0),
+            panel.rgb1.eq(driver.o_rgb1),
+            panel.addr.eq(driver.o_addr),
+            Cat(panel.blank.o0, panel.blank.o1).eq(driver.o_blank),
+            Cat(panel.latch.o0, panel.latch.o1).eq(driver.o_latch),
+            Cat(panel.sclk.o0, panel.latch.o1).eq(driver.o_sclk),
 
-        m.d.comb += self.fwd.i.eq(buttons)
-        m.d.comb += leds.eq(self.fwd.o)
+            panel.blank.o_clk.eq(cd_hsclock.clk),
+            panel.latch.o_clk.eq(cd_hsclock.clk),
+            panel.sclk.o_clk.eq(cd_hsclock.clk),
+        ]
 
         dr = DomainRenamer("hsclock")
-        m.submodules.blinker = dr(self.blinker)
-        m.submodules.fwd = dr(self.fwd)
+        m.submodules.driver = dr(driver)
 
         return m
 
@@ -130,7 +152,7 @@ if __name__ == "__main__":
     if args.action == "simulate":
         from nmigen.back import cxxrtl
         clk_freq = 1e6
-        blinker = LEDBlinker(clk_freq)
+        blinker = PanelDriver(1, clk_freq)
 
         with open('blinker.cpp', 'w') as outf:
             outf.write(cxxrtl.convert(blinker))
@@ -138,4 +160,5 @@ if __name__ == "__main__":
         from nmigen_boards.icebreaker import *
         p = ICEBreakerPlatformCustom()
         p.add_resources(p.break_off_pmod)
+        p.add_resources(p.led_panel_pmod)
         p.build(BoardMapping(), do_program=True)

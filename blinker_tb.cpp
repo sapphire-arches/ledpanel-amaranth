@@ -28,19 +28,13 @@ int main(int argc, const char ** argv) {
   for (int steps = 0; steps <= 100000; ++steps) {
     top.p_clk.set<bool>(false);
     top.step();
-    vcd.sample(steps + 0);
+    vcd.sample(steps * 2 + 0);
 
     top.p_clk.set<bool>(true);
     top.step();
-    vcd.sample(steps + 0.5);
+    vcd.sample(steps * 2 + 1);
 
     if (steps > 300) {
-      top.p_rst.set<bool>(false);
-    }
-    if (steps > 15000) {
-      top.p_rst.set<bool>(true);
-    }
-    if (steps > 20000) {
       top.p_rst.set<bool>(false);
     }
 
