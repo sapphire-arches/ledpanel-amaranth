@@ -24,6 +24,8 @@ int main(int argc, const char ** argv) {
   vcd.sample(0);
 
   top.p_rst.set<bool>(true);
+  // top.p_i__rgb0.set(0b001u);
+  // top.p_i__rgb1.set(0b001u);
 
   for (int steps = 0; steps <= 100000; ++steps) {
     top.p_clk.set<bool>(false);

@@ -11,7 +11,7 @@ def LEDPanelPModResource(*args, conn0, conn1):
     io = []
     io.append(Subsignal("rgb0", Pins("1 2 3", dir="o", conn=conn0, assert_width=3)))
     io.append(Subsignal("rgb1", Pins("7 8 9", dir="o", conn=conn0, assert_width=3)))
-    io.append(Subsignal("addr", Pins("10 4 3 2 1", dir="o", conn=conn1, assert_width=5)))
+    io.append(Subsignal("addr", Pins("1 2 3 4 10", dir="o", conn=conn1, assert_width=5)))
     io.append(Subsignal("blank", Pins("7", dir="o", conn=conn1, assert_width=1)))
     io.append(Subsignal("latch", Pins("8", dir="o", conn=conn1, assert_width=1)))
     io.append(Subsignal("sclk", Pins("9", dir="o", conn=conn1, assert_width=1)))
@@ -21,6 +21,7 @@ def LEDPanelPModResource(*args, conn0, conn1):
 class ICEBreakerPlatformCustom(LatticeICE40Platform):
     device      = "iCE40UP5K"
     package     = "SG48"
+    # default_clk = "clk12"
     default_clk = "SB_HFOSC"
     hfosc_div = 3
 
@@ -86,6 +87,78 @@ class ICEBreakerPlatformCustom(LatticeICE40Platform):
             subprocess.check_call([iceprog, bitstream_filename])
 
 
+class ResetLogic(Elaboratable):
+    def __init__(self, button, led):
+        self.button = button
+        self.led = led
+        self.button_rst_out = Signal()
+
+    def elaborate(self, platform):
+        m = Module()
+
+        button_high_cycles = int(platform.default_clk_frequency * 0.05)
+        button_high_cnt = Signal(range(button_high_cycles + 1))
+        was_low = Signal()
+
+        heartbeat = Signal()
+        heartbeat_counter = Signal(range(int(platform.default_clk_frequency / 2 + 1)))
+
+        m.d.sync += heartbeat_counter.eq(heartbeat_counter + 1)
+        m.d.comb += heartbeat.eq(heartbeat_counter[-1])
+        m.d.comb += platform.request('led', 2).eq(heartbeat)
+
+        with m.If(self.button):
+            with m.If(button_high_cnt == button_high_cycles):
+                m.d.sync += self.button_rst_out.eq(1)
+                m.d.sync += button_high_cnt.eq(0)
+                m.d.sync += was_low.eq(0)
+            with m.Else():
+                with m.If(was_low):
+                    m.d.sync += button_high_cnt.eq(button_high_cnt + 1)
+        with m.Else():
+            m.d.sync += button_high_cnt.eq(0)
+            m.d.sync += was_low.eq(1)
+            with m.If(button_high_cnt == 0):
+                m.d.sync += self.button_rst_out.eq(0)
+            with m.Else():
+                m.d.sync += button_high_cnt.eq(button_high_cnt + 1)
+
+        m.d.comb += self.led.eq(self.button_rst_out)
+
+        return m
+
+class Painter(Elaboratable):
+    def __init__(self, x, y, frame, subframe, o_rgb):
+        self.i_x = x
+        self.i_y = y
+        self.frame = frame
+        self.subframe = subframe
+        self.o_rgb = o_rgb
+
+    def elaborate(self, platform):
+        m = Module()
+
+        x = Signal(self.i_x.width)
+        y = Signal(self.i_y.width)
+        m.d.comb += x.eq(self.i_x)
+        m.d.comb += y.eq(self.i_y)
+
+        border_y = y == self.frame[2:8]
+        border_x = x == self.frame[2:8]
+        border = border_x | border_y
+        x_0 = x.any() & ~((x & (x - 1)).any())
+        y_0 = y.any() & ~((y & (y - 1)).any())
+
+        subf_h = 0b0001 == self.subframe[-4:]
+
+        # rgb = Signal(3)
+
+        m.d.comb += self.o_rgb.eq(Cat(x_0 & subf_h, y_0 & subf_h, border))
+        # m.d.comb += self.o_rgb.eq(x[0:3])
+
+        return m
+
+
 class BoardMapping(Elaboratable):
     def __init__(self):
         pass
@@ -98,6 +171,13 @@ class BoardMapping(Elaboratable):
             'latch': 2,
             'blank': 2,
         })
+
+        led_v = platform.request('led', 0)
+        led_r = platform.request('rgb_led', 0).r
+        led = Signal()
+
+        m.d.comb += led_v.eq(led)
+        m.d.comb += led_r.eq(led)
 
         driver = PanelDriver(1, 30e6)
 
@@ -119,24 +199,40 @@ class BoardMapping(Elaboratable):
                     i_RESETB=1,
                     i_BYPASS=0
                 )
+        # m.d.comb += hsclock_lock.eq(1)
+        # m.d.comb += cd_hsclock.clk.eq(ClockSignal("sync"))
 
-        m.d.comb += cd_hsclock.rst.eq(ResetSignal("sync") & ~hsclock_lock)
-
+        # Bind I/Os
         m.d.comb += [
             panel.rgb0.eq(driver.o_rgb0),
             panel.rgb1.eq(driver.o_rgb1),
             panel.addr.eq(driver.o_addr),
             Cat(panel.blank.o0, panel.blank.o1).eq(driver.o_blank),
             Cat(panel.latch.o0, panel.latch.o1).eq(driver.o_latch),
-            Cat(panel.sclk.o0, panel.latch.o1).eq(driver.o_sclk),
+            Cat(panel.sclk.o0, panel.sclk.o1).eq(driver.o_sclk),
 
             panel.blank.o_clk.eq(cd_hsclock.clk),
             panel.latch.o_clk.eq(cd_hsclock.clk),
             panel.sclk.o_clk.eq(cd_hsclock.clk),
         ]
 
+        # Tie a button to the reset line
+        button = platform.request('button', 0)
+        reset_mod = ResetLogic(button, led)
+
+        # Bind reset logic
+        m.d.comb += cd_hsclock.rst.eq(reset_mod.button_rst_out | ResetSignal("sync") | ~hsclock_lock)
+
+        m.d.comb += platform.request('led', 6).eq(cd_hsclock.rst)
+
+        # Add the subdomain
         dr = DomainRenamer("hsclock")
         m.submodules.driver = dr(driver)
+        m.submodules.reset_mod = reset_mod
+
+        # Add painters
+        m.submodules.painter0 = dr(Painter(driver.o_x, driver.o_y0, driver.o_frame, driver.o_subframe, driver.i_rgb0))
+        m.submodules.painter1 = dr(Painter(driver.o_x, driver.o_y1, driver.o_frame, driver.o_subframe, driver.i_rgb1))
 
         return m
 
