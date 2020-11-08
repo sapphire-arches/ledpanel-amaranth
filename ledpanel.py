@@ -132,18 +132,22 @@ class PanelDriver(Elaboratable):
                 m.d.sync += counter.eq(counter + 1);
                 m.d.sync += sclk.eq(0b10);
 
-                with m.If(counter[0:6] == 63):
+                with m.If(counter[0:x.width] == self.columns - 1):
                     m.next = "INIT_R2E"
             with m.State("INIT_R2E"):
                 m.d.sync += state_out.eq(0b010)
                 m.d.sync += latch.eq(0b00)
                 m.d.sync += sclk.eq(0b00)
                 m.d.sync += counter.eq(0)
-                m.d.sync += out_counter.eq(self.painter_latency)
+                m.d.sync += out_counter.eq(0)
                 m.d.sync += delay_counter.eq(0)
-                m.next = "INIT_DELAY"
+                if self.painter_latency > 0:
+                    m.next = "INIT_DELAY"
+                else:
+                    m.next = "SHIFT"
             with m.State("INIT_DELAY"):
                 m.d.sync += delay_counter.eq(delay_counter + 1)
+                m.d.sync += out_counter.eq(out_counter + 1)
                 with m.If(delay_counter == self.painter_latency):
                     m.next = "SHIFT"
             with m.State("SHIFT0"):
@@ -171,14 +175,16 @@ class PanelDriver(Elaboratable):
             with m.State("BLANK"):
                 m.d.sync += blank.eq(0b11)
                 m.d.sync += latch.eq(0b11)
+                m.d.sync += sclk.eq(0b00);
                 if self.painter_latency == 2:
                     m.d.sync += out_counter.eq(out_counter + 1)
-                m.d.sync += sclk.eq(0b00);
                 m.next = "UNBLANK"
             with m.State("UNBLANK"):
                 m.d.sync += addr_reg.eq(addr)
                 m.d.sync += counter.eq(counter + 1)
                 if self.painter_latency == 1:
+                    m.d.sync += out_counter.eq(out_counter + 1)
+                if self.painter_latency == 0:
                     m.d.sync += out_counter.eq(out_counter + 1)
                 m.d.sync += blank.eq(0b10)
                 m.d.sync += latch.eq(0b00)

@@ -127,8 +127,8 @@ class ResetLogic(Elaboratable):
 
         return m
 
-class OneCycleAddrTest(Elaboratable):
-    def __init__(self, driver, side):
+class CycleAddrTest(Elaboratable):
+    def __init__(self, cycles, driver, side):
         self.x = driver.o_x
         self.frame = driver.o_frame
         self.subframe = driver.o_subframe
@@ -141,6 +141,9 @@ class OneCycleAddrTest(Elaboratable):
         else:
             raise ValueError("Driver doesn't export side {}".format(side))
 
+        assert cycles < 3
+        self.cycles = cycles
+
     def elaborate(self, platform):
         m = Module()
 
@@ -148,7 +151,7 @@ class OneCycleAddrTest(Elaboratable):
         y = self.y
 
         border_y = (y == 0) | (y == 63) # y == self.frame[0:6]
-        border_x = (x == 1) | (x == 63) # x == self.frame[0:6]
+        border_x = (x == 0) | (x == 63) # x == self.frame[0:6]
         border = border_x | border_y
         x_0 = x.any() & ~((x & (x - 1)).any())
         y_0 = y.any() & ~((y & (y - 1)).any())
@@ -156,11 +159,19 @@ class OneCycleAddrTest(Elaboratable):
         subf_h = 0b0001 == self.subframe[-4:]
 
         rgb = Signal(3)
-        rgb_ff = Signal(3)
-        m.d.sync += rgb.eq(Cat(x_0 & subf_h, y_0 & subf_h, border))
-        m.d.sync += rgb_ff.eq(rgb)
+        rgb_ff_0 = Signal(3)
+        rgb_ff_1 = Signal(3)
+        m.d.comb += rgb.eq(Cat(x_0 & subf_h, y_0 & subf_h, border))
 
-        m.d.comb += self.o_rgb.eq(rgb_ff)
+        m.d.sync += rgb_ff_0.eq(rgb)
+        m.d.sync += rgb_ff_1.eq(rgb_ff_0)
+
+        if self.cycles == 0:
+            m.d.comb += self.o_rgb.eq(rgb)
+        elif self.cycles == 1:
+            m.d.comb += self.o_rgb.eq(rgb_ff_0)
+        elif self.cycles == 2:
+            m.d.comb += self.o_rgb.eq(rgb_ff_1)
 
         return m
 
@@ -217,7 +228,7 @@ class Painter(Elaboratable):
         m.d.comb += rgb.eq(
                 Cat(Mux(is_zero_zero, val_zero_zero, pwm_r.o_bit), pwm_g.o_bit, pwm_b.o_bit) & Repl(x[2] & y[2], 3))
         m.d.sync += rgb_ff.eq(rgb)
-        m.d.comb += self.o_rgb.eq(rgb_ff)
+        m.d.comb += self.o_rgb.eq(rgb)
 
         m.submodules.pwm_r = pwm_r
         m.submodules.pwm_g = pwm_g
@@ -245,7 +256,11 @@ class BoardMapping(Elaboratable):
         m.d.comb += led_v.eq(led)
         m.d.comb += led_r.eq(led)
 
-        driver = PanelDriver(1, 30e6)
+        test_cycles = 0
+        if test_cycles < 3:
+            driver = PanelDriver(test_cycles, 30e6)
+        else:
+            driver = PanelDriver(1, 30e6)
 
         cd_hsclock = ClockDomain()
         m.domains += cd_hsclock
@@ -305,8 +320,12 @@ class BoardMapping(Elaboratable):
         m.submodules.reset_mod = reset_mod
 
         # Add painters
-        m.submodules.painter0 = dr(Painter(driver, side=0))
-        m.submodules.painter1 = dr(Painter(driver, side=1))
+        if test_cycles < 3:
+            m.submodules.painter0 = dr(CycleAddrTest(test_cycles, driver, side=0))
+            m.submodules.painter1 = dr(CycleAddrTest(test_cycles, driver, side=1))
+        else:
+            m.submodules.painter0 = dr(Painter(driver, side=0))
+            m.submodules.painter1 = dr(Painter(driver, side=1))
 
         return m
 
