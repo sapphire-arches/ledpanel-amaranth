@@ -127,37 +127,103 @@ class ResetLogic(Elaboratable):
 
         return m
 
-class Painter(Elaboratable):
-    def __init__(self, x, y, frame, subframe, o_rgb):
-        self.i_x = x
-        self.i_y = y
-        self.frame = frame
-        self.subframe = subframe
-        self.o_rgb = o_rgb
+class OneCycleAddrTest(Elaboratable):
+    def __init__(self, driver, side):
+        self.x = driver.o_x
+        self.frame = driver.o_frame
+        self.subframe = driver.o_subframe
+        if side == 0:
+            self.y = driver.o_y0
+            self.o_rgb = driver.i_rgb0
+        elif side == 1:
+            self.y = driver.o_y1
+            self.o_rgb = driver.i_rgb1
+        else:
+            raise ValueError("Driver doesn't export side {}".format(side))
 
     def elaborate(self, platform):
         m = Module()
 
-        x = Signal(self.i_x.width)
-        y = Signal(self.i_y.width)
-        m.d.comb += x.eq(self.i_x)
-        m.d.comb += y.eq(self.i_y)
+        x = self.x
+        y = self.y
 
-        border_y = y == self.frame[2:8]
-        border_x = x == self.frame[2:8]
+        border_y = (y == 0) | (y == 63) # y == self.frame[0:6]
+        border_x = (x == 1) | (x == 63) # x == self.frame[0:6]
         border = border_x | border_y
         x_0 = x.any() & ~((x & (x - 1)).any())
         y_0 = y.any() & ~((y & (y - 1)).any())
 
         subf_h = 0b0001 == self.subframe[-4:]
 
-        # rgb = Signal(3)
+        rgb = Signal(3)
+        rgb_ff = Signal(3)
+        m.d.sync += rgb.eq(Cat(x_0 & subf_h, y_0 & subf_h, border))
+        m.d.sync += rgb_ff.eq(rgb)
 
-        m.d.comb += self.o_rgb.eq(Cat(x_0 & subf_h, y_0 & subf_h, border))
-        # m.d.comb += self.o_rgb.eq(x[0:3])
+        m.d.comb += self.o_rgb.eq(rgb_ff)
 
         return m
 
+class PWM(Elaboratable):
+    def __init__(self, v, subframe):
+        self.v = v
+        self.subframe = subframe
+        assert v.shape().width == subframe.shape().width
+        self.o_bit = Signal()
+
+    def elaborate(self, platform):
+        m = Module()
+
+        # Reverse the subframe so the minimum flicker frequency is higher
+        rev = Signal(self.v.shape())
+        m.d.comb += [rev[rev.width - i - 1].eq(self.subframe[i]) for i in range(rev.width)]
+
+        m.d.comb += self.o_bit.eq(self.v > rev)
+
+        return m
+
+class Painter(Elaboratable):
+    def __init__(self, driver, side):
+        self.x = driver.o_x
+        self.frame = driver.o_frame
+        self.subframe = driver.o_subframe
+        if side == 0:
+            self.y = driver.o_y0
+            self.o_rgb = driver.i_rgb0
+        elif side == 1:
+            self.y = driver.o_y1
+            self.o_rgb = driver.i_rgb1
+        else:
+            raise ValueError("Driver doesn't export side {}".format(side))
+
+    def elaborate(self, platform):
+        m = Module()
+
+        x = self.x
+        y = self.y
+
+        is_zero_zero = (x == 0) & (y == self.frame[0:6])
+        val_zero_zero = self.frame[1]
+
+        grad_pos_r = (self.x + self.frame[1:])[0:8]
+        grad_pos_g = (self.y + self.frame[1:])[0:8]
+        grad_pos_b = (self.y + self.x + self.frame[2:])[0:8]
+        pwm_r = PWM(grad_pos_r, self.subframe)
+        pwm_g = PWM(grad_pos_g, self.subframe)
+        pwm_b = PWM(grad_pos_b, self.subframe)
+
+        rgb = Signal(3)
+        rgb_ff = Signal(3)
+        m.d.comb += rgb.eq(
+                Cat(Mux(is_zero_zero, val_zero_zero, pwm_r.o_bit), pwm_g.o_bit, pwm_b.o_bit) & Repl(x[2] & y[2], 3))
+        m.d.sync += rgb_ff.eq(rgb)
+        m.d.comb += self.o_rgb.eq(rgb_ff)
+
+        m.submodules.pwm_r = pwm_r
+        m.submodules.pwm_g = pwm_g
+        m.submodules.pwm_b = pwm_b
+
+        return m
 
 class BoardMapping(Elaboratable):
     def __init__(self):
@@ -202,11 +268,19 @@ class BoardMapping(Elaboratable):
         # m.d.comb += hsclock_lock.eq(1)
         # m.d.comb += cd_hsclock.clk.eq(ClockSignal("sync"))
 
+        # Add a register for the RGB outputs and addrs to synchronioze with the DDR outputs
+        rgb0_ff = Signal.like(driver.o_rgb0, name_suffix='_ff')
+        rgb1_ff = Signal.like(driver.o_rgb1, name_suffix='_ff')
+        addr_ff = Signal.like(driver.o_addr, name_suffix='_ff')
+        m.d.hsclock += rgb0_ff.eq(driver.o_rgb0)
+        m.d.hsclock += rgb1_ff.eq(driver.o_rgb1)
+        m.d.hsclock += addr_ff.eq(driver.o_addr)
+
         # Bind I/Os
         m.d.comb += [
-            panel.rgb0.eq(driver.o_rgb0),
-            panel.rgb1.eq(driver.o_rgb1),
-            panel.addr.eq(driver.o_addr),
+            panel.rgb0.eq(rgb0_ff),
+            panel.rgb1.eq(rgb1_ff),
+            panel.addr.eq(addr_ff),
             Cat(panel.blank.o0, panel.blank.o1).eq(driver.o_blank),
             Cat(panel.latch.o0, panel.latch.o1).eq(driver.o_latch),
             Cat(panel.sclk.o0, panel.sclk.o1).eq(driver.o_sclk),
@@ -231,8 +305,8 @@ class BoardMapping(Elaboratable):
         m.submodules.reset_mod = reset_mod
 
         # Add painters
-        m.submodules.painter0 = dr(Painter(driver.o_x, driver.o_y0, driver.o_frame, driver.o_subframe, driver.i_rgb0))
-        m.submodules.painter1 = dr(Painter(driver.o_x, driver.o_y1, driver.o_frame, driver.o_subframe, driver.i_rgb1))
+        m.submodules.painter0 = dr(Painter(driver, side=0))
+        m.submodules.painter1 = dr(Painter(driver, side=1))
 
         return m
 
