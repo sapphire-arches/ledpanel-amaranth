@@ -7,6 +7,9 @@ import argparse
 import os
 import subprocess
 
+# range 0-2, 3 means use the fancy painter
+TEST_CYCLES = 3
+
 def LEDPanelPModResource(*args, conn0, conn1):
     io = []
     io.append(Subsignal("rgb0", Pins("1 2 3", dir="o", conn=conn0, assert_width=3)))
@@ -128,6 +131,8 @@ class ResetLogic(Elaboratable):
         return m
 
 class CycleAddrTest(Elaboratable):
+    MAX_TEST_CYCLES = 2
+
     def __init__(self, cycles, driver, side):
         self.x = driver.o_x
         self.frame = driver.o_frame
@@ -150,7 +155,7 @@ class CycleAddrTest(Elaboratable):
         x = self.x
         y = self.y
 
-        border_y = (y == 0) | (y == 63) # y == self.frame[0:6]
+        border_y = (y == 31) | (y == 63) # y == self.frame[0:6]
         border_x = (x == 0) | (x == 63) # x == self.frame[0:6]
         border = border_x | border_y
         x_0 = x.any() & ~((x & (x - 1)).any())
@@ -194,6 +199,8 @@ class PWM(Elaboratable):
         return m
 
 class Painter(Elaboratable):
+    LATENCY = 0
+
     def __init__(self, driver, side):
         self.x = driver.o_x
         self.frame = driver.o_frame
@@ -216,23 +223,36 @@ class Painter(Elaboratable):
         is_zero_zero = (x == 0) & (y == self.frame[0:6])
         val_zero_zero = self.frame[1]
 
-        grad_pos_r = (self.x + self.frame[1:])[0:8]
-        grad_pos_g = (self.y + self.frame[1:])[0:8]
-        grad_pos_b = (self.y + self.x + self.frame[2:])[0:8]
-        pwm_r = PWM(grad_pos_r, self.subframe)
-        pwm_g = PWM(grad_pos_g, self.subframe)
-        pwm_b = PWM(grad_pos_b, self.subframe)
+        # grad_pos_r = (self.x + self.frame[1:])[0:8]
+        # grad_pos_g = (self.y + self.frame[1:])[0:8]
+        # grad_pos_b = (self.y + self.x + self.frame[2:])[0:8]
+        # pwm_r = PWM(grad_pos_r, self.subframe)
+        # pwm_g = PWM(grad_pos_g, self.subframe)
+        # pwm_b = PWM(grad_pos_b, self.subframe)
 
-        rgb = Signal(3)
-        rgb_ff = Signal(3)
-        m.d.comb += rgb.eq(
-                Cat(Mux(is_zero_zero, val_zero_zero, pwm_r.o_bit), pwm_g.o_bit, pwm_b.o_bit) & Repl(x[2] & y[2], 3))
-        m.d.sync += rgb_ff.eq(rgb)
-        m.d.comb += self.o_rgb.eq(rgb)
+        # rgb = Signal(3)
+        # rgb_ff = Signal(3)
+        # m.d.comb += rgb.eq(
+        #         Cat(Mux(is_zero_zero, val_zero_zero, pwm_r.o_bit), pwm_g.o_bit, pwm_b.o_bit) & Repl(x[2] & y[2], 3))
+        # m.d.sync += rgb_ff.eq(rgb)
+        # m.d.comb += self.o_rgb.eq(rgb)
 
-        m.submodules.pwm_r = pwm_r
-        m.submodules.pwm_g = pwm_g
-        m.submodules.pwm_b = pwm_b
+        # m.submodules.pwm_r = pwm_r
+        # m.submodules.pwm_g = pwm_g
+        # m.submodules.pwm_b = pwm_b
+
+        d = Signal(3)
+        d_ff = Signal(3)
+        m.d.comb += d.eq(
+                # Repl((y == 0) & (x == self.frame[0:6]), 3)
+                Cat(
+                    (x == self.frame[1:7]),
+                    (y == 31),
+                    0
+                )
+        )
+        m.d.sync += d_ff.eq(d)
+        m.d.comb += self.o_rgb.eq(d)
 
         return m
 
@@ -256,11 +276,10 @@ class BoardMapping(Elaboratable):
         m.d.comb += led_v.eq(led)
         m.d.comb += led_r.eq(led)
 
-        test_cycles = 0
-        if test_cycles < 3:
-            driver = PanelDriver(test_cycles, 30e6)
+        if TEST_CYCLES <= CycleAddrTest.MAX_TEST_CYCLES:
+            driver = PanelDriver(TEST_CYCLES, 30e6)
         else:
-            driver = PanelDriver(1, 30e6)
+            driver = PanelDriver(Painter.LATENCY, 30e6)
 
         cd_hsclock = ClockDomain()
         m.domains += cd_hsclock
@@ -283,19 +302,16 @@ class BoardMapping(Elaboratable):
         # m.d.comb += hsclock_lock.eq(1)
         # m.d.comb += cd_hsclock.clk.eq(ClockSignal("sync"))
 
-        # Add a register for the RGB outputs and addrs to synchronioze with the DDR outputs
-        rgb0_ff = Signal.like(driver.o_rgb0, name_suffix='_ff')
-        rgb1_ff = Signal.like(driver.o_rgb1, name_suffix='_ff')
-        addr_ff = Signal.like(driver.o_addr, name_suffix='_ff')
-        m.d.hsclock += rgb0_ff.eq(driver.o_rgb0)
-        m.d.hsclock += rgb1_ff.eq(driver.o_rgb1)
-        m.d.hsclock += addr_ff.eq(driver.o_addr)
+        # Add a register for the RGB outputs and addrs to synchronize with the DDR outputs
+        delay_sigs = Cat(driver.o_rgb0, driver.o_rgb1, driver.o_addr)
+        delayed_sigs = Cat(panel.rgb0, panel.rgb1, panel.addr)
+        delay_sigs_ff = Signal.like(delay_sigs)
+        m.d.hsclock += delay_sigs_ff.eq(delay_sigs)
 
         # Bind I/Os
         m.d.comb += [
-            panel.rgb0.eq(rgb0_ff),
-            panel.rgb1.eq(rgb1_ff),
-            panel.addr.eq(addr_ff),
+            delayed_sigs.eq(delay_sigs_ff),
+            # panel.addr.eq(driver.o_addr),
             Cat(panel.blank.o0, panel.blank.o1).eq(driver.o_blank),
             Cat(panel.latch.o0, panel.latch.o1).eq(driver.o_latch),
             Cat(panel.sclk.o0, panel.sclk.o1).eq(driver.o_sclk),
@@ -320,9 +336,9 @@ class BoardMapping(Elaboratable):
         m.submodules.reset_mod = reset_mod
 
         # Add painters
-        if test_cycles < 3:
-            m.submodules.painter0 = dr(CycleAddrTest(test_cycles, driver, side=0))
-            m.submodules.painter1 = dr(CycleAddrTest(test_cycles, driver, side=1))
+        if TEST_CYCLES < 3:
+            m.submodules.painter0 = dr(CycleAddrTest(TEST_CYCLES, driver, side=0))
+            m.submodules.painter1 = dr(CycleAddrTest(TEST_CYCLES, driver, side=1))
         else:
             m.submodules.painter0 = dr(Painter(driver, side=0))
             m.submodules.painter1 = dr(Painter(driver, side=1))
@@ -341,10 +357,36 @@ if __name__ == "__main__":
     if args.action == "simulate":
         from nmigen.back import cxxrtl
         clk_freq = 1e6
-        blinker = PanelDriver(1, clk_freq)
+
+        m = Module()
+
+        if TEST_CYCLES <= CycleAddrTest.MAX_TEST_CYCLES:
+            driver = PanelDriver(TEST_CYCLES, clk_freq)
+            painter0 = CycleAddrTest(TEST_CYCLES, driver, side=0)
+            painter1 = CycleAddrTest(TEST_CYCLES, driver, side=1)
+        else:
+            driver = PanelDriver(Painter.LATENCY, clk_freq)
+            painter0 = Painter(driver, side=0)
+            painter1 = Painter(driver, side=1)
+
+        m.submodules.driver = driver
+        m.submodules.painter0 = painter0
+        m.submodules.painter1 = painter1
+
+        ports = [
+            driver.o_frame,
+            driver.o_subframe,
+            driver.o_rgb0,
+            driver.o_rgb1,
+            driver.o_sclk,
+            driver.o_addr,
+            driver.o_blank,
+            driver.o_latch,
+            driver.o_rdy,
+        ]
 
         with open('blinker.cpp', 'w') as outf:
-            outf.write(cxxrtl.convert(blinker))
+            outf.write(cxxrtl.convert(m, ports=ports))
     if args.action == "program":
         from nmigen_boards.icebreaker import *
         p = ICEBreakerPlatformCustom()

@@ -11,6 +11,7 @@ class PanelDriver(Elaboratable):
         self.o_blank = Signal(2)
         self.o_latch = Signal(2)
         self.o_sclk = Signal(2)
+        self.o_rdy = Signal(1)
 
         self.o_x  = Signal(range(self.columns))
         self.o_y0 = Signal(self.o_addr.width + 1)
@@ -43,40 +44,34 @@ class PanelDriver(Elaboratable):
         init_lcnt = Signal(7)
         delay_counter = Signal(range(self.painter_latency + 1), reset=0b00)
 
+        # Data required by painters. The painter_counter should always lead the main counter by
         x = Signal(range(self.columns))
-        addr = Signal(5)
-        addr_reg = Signal(addr.width)
+        y = Signal(5)
         subframe = Signal(self.bpp)
         frame = Signal(self.o_frame.width)
+        counter_comb = Cat(x, y, subframe, frame)
+        painter_counter = Signal(counter_comb.shape().width)
+        m.d.comb += counter_comb.eq(painter_counter)
 
-        counter_comb = Cat(x, addr, subframe, frame)
+        # Values for tracking what we're sending to the panel
         counter = Signal(counter_comb.shape().width)
-        m.d.comb += counter_comb.eq(counter)
+        led_addr = Signal(5)
+        led_addr_reg = Signal(5)
 
+        m.d.comb += led_addr.eq(counter[x.width:(x.width + led_addr_reg.width)])
+
+        y_reg = Signal(led_addr.width)
         y0 = Signal(6)
         y1 = Signal(6)
-        m.d.comb += y0.eq(Cat(addr, 0))
-        m.d.comb += y1.eq(Cat(addr, 1))
+        m.d.comb += y0.eq(Cat(y, 0))
+        m.d.comb += y1.eq(Cat(y, 1))
 
-        out_x = Signal(x.width)
-        out_counter = Signal(counter.width)
-        out_addr = Signal(addr.width)
-        out_subframe = Signal(subframe.width)
-        out_frame = Signal(frame.width)
-        out_counter_comb = Cat(out_x, out_addr, out_subframe, out_frame)
-        out_y0 = Signal(6)
-        out_y1 = Signal(6)
-        m.d.comb += out_counter_comb.eq(out_counter)
-        m.d.comb += out_y0.eq(Cat(out_addr, 0))
-        m.d.comb += out_y1.eq(Cat(out_addr, 1))
+        m.d.comb += self.o_x.eq(x)
+        m.d.comb += self.o_y0.eq(y0)
+        m.d.comb += self.o_y1.eq(y1)
+        m.d.comb += self.o_subframe.eq(subframe)
+        m.d.comb += self.o_frame.eq(frame)
 
-        m.d.comb += self.o_x.eq(out_x)
-        m.d.comb += self.o_y0.eq(out_y0)
-        m.d.comb += self.o_y1.eq(out_y1)
-        m.d.comb += self.o_subframe.eq(out_subframe)
-        m.d.comb += self.o_frame.eq(out_frame)
-
-        # border = (x == 0) | (x == 63) | (y0 == 0)
         state_out = Signal(3)
         if platform is not None:
             out_dbg_leds = Cat(
@@ -94,6 +89,7 @@ class PanelDriver(Elaboratable):
                 m.d.sync += init_reg.eq(FM6126_INIT_1)
                 m.d.sync += init_lcnt.eq(52)
                 m.d.sync += counter.eq(0)
+                m.d.sync += self.o_rdy.eq(0)
                 m.next = "INIT_R1"
             with m.State("INIT_R1"):
                 m.d.sync += state_out.eq(0b011)
@@ -139,22 +135,26 @@ class PanelDriver(Elaboratable):
                 m.d.sync += latch.eq(0b00)
                 m.d.sync += sclk.eq(0b00)
                 m.d.sync += counter.eq(0)
-                m.d.sync += out_counter.eq(0)
+                m.d.sync += painter_counter.eq(0)
                 m.d.sync += delay_counter.eq(0)
-                if self.painter_latency > 0:
-                    m.next = "INIT_DELAY"
-                else:
+                if self.painter_latency == 0:
+                    m.d.sync += self.o_rdy.eq(1)
                     m.next = "SHIFT"
+                else:
+                    m.d.sync += self.o_rdy.eq(1)
+                    m.next = "INIT_DELAY"
             with m.State("INIT_DELAY"):
                 m.d.sync += delay_counter.eq(delay_counter + 1)
-                m.d.sync += out_counter.eq(out_counter + 1)
+                m.d.sync += painter_counter.eq(painter_counter + 1)
                 with m.If(delay_counter == self.painter_latency):
+                    # m.d.sync += y_reg.eq(y)
+                    m.d.sync += self.o_rdy.eq(1)
                     m.next = "SHIFT"
             with m.State("SHIFT0"):
                 m.d.sync += led_rgb0.eq(self.i_rgb0)
                 m.d.sync += led_rgb1.eq(self.i_rgb1)
                 m.d.sync += counter.eq(counter + 1)
-                m.d.sync += out_counter.eq(out_counter + 1)
+                m.d.sync += painter_counter.eq(painter_counter + 1)
                 m.d.sync += blank.eq(0b00)
                 m.d.sync += sclk.eq(0b10)
                 m.next = "SHIFT"
@@ -163,29 +163,25 @@ class PanelDriver(Elaboratable):
                 m.d.sync += led_rgb0.eq(self.i_rgb0)
                 m.d.sync += led_rgb1.eq(self.i_rgb1)
                 m.d.sync += counter.eq(counter + 1)
-                m.d.sync += out_counter.eq(out_counter + 1)
+                m.d.sync += painter_counter.eq(painter_counter + 1)
                 m.d.sync += sclk.eq(0b10)
-                with m.If(x == self.columns - 2):
+                with m.If(counter[0:x.width] == self.columns - 2):
                     m.next = "SHIFTE"
             with m.State("SHIFTE"):
                 m.d.sync += led_rgb0.eq(self.i_rgb0)
                 m.d.sync += led_rgb1.eq(self.i_rgb1)
+                # m.d.sync += y_reg.eq(y)
                 m.d.sync += blank.eq(0b01)
                 m.next = "BLANK"
             with m.State("BLANK"):
+                m.d.sync += led_addr_reg.eq(led_addr)
                 m.d.sync += blank.eq(0b11)
                 m.d.sync += latch.eq(0b11)
                 m.d.sync += sclk.eq(0b00);
-                if self.painter_latency == 2:
-                    m.d.sync += out_counter.eq(out_counter + 1)
                 m.next = "UNBLANK"
             with m.State("UNBLANK"):
-                m.d.sync += addr_reg.eq(addr)
                 m.d.sync += counter.eq(counter + 1)
-                if self.painter_latency == 1:
-                    m.d.sync += out_counter.eq(out_counter + 1)
-                if self.painter_latency == 0:
-                    m.d.sync += out_counter.eq(out_counter + 1)
+                m.d.sync += painter_counter.eq(painter_counter + 1)
                 m.d.sync += blank.eq(0b10)
                 m.d.sync += latch.eq(0b00)
                 m.next = "SHIFT0"
@@ -195,6 +191,6 @@ class PanelDriver(Elaboratable):
         m.d.comb += self.o_blank.eq(blank)
         m.d.comb += self.o_latch.eq(latch)
         m.d.comb += self.o_sclk.eq(sclk)
-        m.d.comb += self.o_addr.eq(addr_reg)
+        m.d.comb += self.o_addr.eq(led_addr_reg)
 
         return m
