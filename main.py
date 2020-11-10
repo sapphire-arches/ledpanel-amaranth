@@ -277,9 +277,9 @@ class BoardMapping(Elaboratable):
         m.d.comb += led_r.eq(led)
 
         if TEST_CYCLES <= CycleAddrTest.MAX_TEST_CYCLES:
-            driver = PanelDriver(TEST_CYCLES, 30e6)
+            driver = PanelDriver(TEST_CYCLES)
         else:
-            driver = PanelDriver(Painter.LATENCY, 30e6)
+            driver = PanelDriver(Painter.LATENCY)
 
         cd_hsclock = ClockDomain()
         m.domains += cd_hsclock
@@ -361,11 +361,11 @@ if __name__ == "__main__":
         m = Module()
 
         if TEST_CYCLES <= CycleAddrTest.MAX_TEST_CYCLES:
-            driver = PanelDriver(TEST_CYCLES, clk_freq)
+            driver = PanelDriver(TEST_CYCLES)
             painter0 = CycleAddrTest(TEST_CYCLES, driver, side=0)
             painter1 = CycleAddrTest(TEST_CYCLES, driver, side=1)
         else:
-            driver = PanelDriver(Painter.LATENCY, clk_freq)
+            driver = PanelDriver(Painter.LATENCY)
             painter0 = Painter(driver, side=0)
             painter1 = Painter(driver, side=1)
 

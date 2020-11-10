@@ -1,7 +1,8 @@
 from nmigen import *
+from nmigen.asserts import *
 
 class PanelDriver(Elaboratable):
-    def __init__(self, painter_latency, clk_freq, bpp=8):
+    def __init__(self, painter_latency, bpp=8):
         self.columns = 64       # TODO: make generic
         self.bpp = 8
 
@@ -11,7 +12,7 @@ class PanelDriver(Elaboratable):
         self.o_blank = Signal(2)
         self.o_latch = Signal(2)
         self.o_sclk = Signal(2)
-        self.o_rdy = Signal(1)
+        self.o_rdy = Signal(1, reset=0)
 
         self.o_x  = Signal(range(self.columns))
         self.o_y0 = Signal(self.o_addr.width + 1)
@@ -24,6 +25,11 @@ class PanelDriver(Elaboratable):
 
         self.painter_latency = painter_latency
         assert painter_latency <= 2
+
+    def startup_cycles(self):
+        # START + R1 scanout + R2 scanout + painter spoolup
+        return 2 + 64 + 64 + self.painter_latency
+
 
     def elaborate(self, platform):
         m = Module()
@@ -73,7 +79,7 @@ class PanelDriver(Elaboratable):
         m.d.comb += self.o_frame.eq(frame)
 
         state_out = Signal(3)
-        if platform is not None:
+        if platform is not None and platform != "formal":
             out_dbg_leds = Cat(
                 platform.request('led', 3),
                 platform.request('led', 4),
@@ -82,7 +88,7 @@ class PanelDriver(Elaboratable):
 
             m.d.comb += out_dbg_leds.eq(state_out)
 
-        with m.FSM() as fsm:
+        with m.FSM() as pixel_fsm:
             with m.State("START"):
                 m.d.sync += state_out.eq(0b001)
                 m.d.sync += blank.eq(0b11)
@@ -141,12 +147,12 @@ class PanelDriver(Elaboratable):
                     m.d.sync += self.o_rdy.eq(1)
                     m.next = "SHIFT"
                 else:
-                    m.d.sync += self.o_rdy.eq(1)
                     m.next = "INIT_DELAY"
             with m.State("INIT_DELAY"):
                 m.d.sync += delay_counter.eq(delay_counter + 1)
                 m.d.sync += painter_counter.eq(painter_counter + 1)
                 with m.If(delay_counter == self.painter_latency):
+                    m.d.sync += self.o_rdy.eq(1)
                     # m.d.sync += y_reg.eq(y)
                     m.d.sync += self.o_rdy.eq(1)
                     m.next = "SHIFT"
@@ -185,6 +191,10 @@ class PanelDriver(Elaboratable):
                 m.d.sync += blank.eq(0b10)
                 m.d.sync += latch.eq(0b00)
                 m.next = "SHIFT0"
+
+        if platform == "formal":
+            with m.If(Initial()):
+                m.d.comb += Assume(pixel_fsm.ongoing("START"))
 
         m.d.comb += self.o_rgb0.eq(led_rgb0)
         m.d.comb += self.o_rgb1.eq(led_rgb1)

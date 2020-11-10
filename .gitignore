@@ -3,4 +3,5 @@ blinker_tb
 *.vcd
 *.gtkw
 build/*
-__pycache__/*
+**/__pycache__/*
+tests/spec_*/*
