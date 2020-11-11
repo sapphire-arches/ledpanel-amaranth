@@ -2,7 +2,7 @@ from .utils import *
 from nmigen import *
 from nmigen.asserts import *
 
-from ledpanel import PanelDriver
+from ledpanel import PixelScanner
 
 class PanelDriverStartupSpec(Elaboratable):
     def __init__(self, test_latency):
@@ -11,10 +11,10 @@ class PanelDriverStartupSpec(Elaboratable):
     def elaborate(self, platform):
         m = Module()
 
-        dut = PanelDriver(self.test_latency)
+        dut = PixelScanner(self.test_latency, 8)
         m.submodules.dut = dut
 
-        counter = Signal(range(dut.startup_cycles() + 1))
+        # counter = Signal(range(dut.startup_cycles() + 1))
 
         # Assuming reset is never asserted, once the driver is ready it should
         # never be unready. This is relied upon by all the other tests in this
@@ -34,14 +34,15 @@ class PanelDriverOutputSpec(Elaboratable):
 
     def elaborate(self, platform):
         m = Module()
-        dut = PanelDriver(0)
+        dut = PixelScanner(0, 8)
 
         m.submodules.dut = dut
 
         pixel0 = Signal(3)
         pixel1 = Signal(3)
 
-        m.d.comb += ResetSignal().eq(~Initial())
+        m.d.comb += ResetSignal().eq(0)
+        m.d.comb += dut.i_start.eq(~Initial())
 
         m.d.sync += pixel0.eq(AnyConst(3))
         m.d.sync += pixel1.eq(AnyConst(3))
@@ -49,22 +50,21 @@ class PanelDriverOutputSpec(Elaboratable):
         m.d.comb += dut.i_rgb0.eq(pixel0)
         m.d.comb += dut.i_rgb1.eq(pixel1)
 
-        with m.If((dut.o_rdy == 1) & (dut.o_sclk == 0b10)):
-            m.d.sync += Assert(dut.o_rgb0 == Past(pixel0, self.test_latency))
-            m.d.sync += Assert(dut.o_rgb1 == Past(pixel1, self.test_latency))
+        with m.If(dut.o_sclk.any()):
+            m.d.sync += Assert(Past(dut.o_y0, self.test_latency + 1)[0:5] == dut.o_addr)
 
         return m
 
 
 class SimpleTest(FHDLTestCase):
     def test_startup(self):
-        self.assertFormal(PanelDriverStartupSpec(0), mode="prove", depth=200)
+        self.assertFormal(PanelDriverStartupSpec(0), mode="prove", depth=10)
 
     def test_output_0(self):
-        self.assertFormal(PanelDriverOutputSpec(0), mode="prove", depth=200)
+        self.assertFormal(PanelDriverOutputSpec(0), mode="prove", depth=300)
 
-    def test_output_1(self):
-        self.assertFormal(PanelDriverOutputSpec(1), mode="prove", depth=10)
+    # def test_output_1(self):
+    #     self.assertFormal(PanelDriverOutputSpec(1), mode="prove", depth=10)
 
-    def test_output_2(self):
-        self.assertFormal(PanelDriverOutputSpec(2), mode="prove", depth=10)
+    # def test_output_2(self):
+    #     self.assertFormal(PanelDriverOutputSpec(2), mode="prove", depth=10)

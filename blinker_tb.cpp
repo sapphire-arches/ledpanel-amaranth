@@ -35,7 +35,7 @@ public:
     if (prev_latch_line && !latch) {
       // on falling edge, accept data
       std::copy(input.begin(), input.end(), latched.begin());
-      assert(offset == 0);
+      // assert(offset == 0);
     }
     prev_latch_line = latch;
   }
@@ -156,7 +156,7 @@ int main(int argc, const char ** argv) {
 
   cxxrtl::debug_items all_debug_items;
 
-  top.debug_info(all_debug_items);
+  top.debug_info(all_debug_items, "top ");
 
   cxxrtl::vcd_writer vcd;
   vcd.timescale(1, "us");
@@ -228,7 +228,7 @@ int main(int argc, const char ** argv) {
         // panel.on_next_frame();
         // panel.frame = frame;
       }
-      std::cout << "STEPS[" << steps << "]" << "RUNNING[" << o_rdy_high << "]" << "SUBFRAME[" << subframe << "] " << panel << std::endl;
+      // std::cout << "STEPS[" << steps << "]" << "RUNNING[" << o_rdy_high << "]" << "SUBFRAME[" << subframe << "] " << panel << std::endl;
     }
     last_subframe = subframe;
 

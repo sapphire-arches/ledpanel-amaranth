@@ -247,7 +247,7 @@ class Painter(Elaboratable):
                 # Repl((y == 0) & (x == self.frame[0:6]), 3)
                 Cat(
                     (x == self.frame[1:7]),
-                    (y == 31),
+                    (y == self.frame[0:6]),
                     0
                 )
         )

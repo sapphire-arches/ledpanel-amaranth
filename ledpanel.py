@@ -15,22 +15,22 @@ def PanelSignal(rgb0, rgb1, addr, blank, latch, sclk):
 class PanelMux(Elaboratable):
     PANEL_WIDTH = 3 + 3 + 5 + 2 + 2 + 2
 
-    def __init__(self, sel, i0, i1, o):
+    def __init__(self, sel, i0, i1):
         sel = Value.cast(sel)
         assert sel.shape().width == 1
         assert i0.shape().width == PanelMux.PANEL_WIDTH
         assert i1.shape().width == PanelMux.PANEL_WIDTH
-        assert o.shape().width == PanelMux.PANEL_WIDTH
 
         self.sel = sel
         self.i0 = i0
         self.i1 = i1
-        self.o = o
+        self.o = Signal(PanelMux.PANEL_WIDTH)
 
     def elaborate(self, platform):
         m = Module()
 
-        m.d.comb += self.o.eq(Mux(self.sel, self.i0, self.i1))
+        m.d.comb += self.o.eq(Mux(self.sel, self.i1, self.i0))
+
 
         return m
 
@@ -109,17 +109,20 @@ class FM6126StartupDriver(Elaboratable):
                 m.next = State.INIT_R2
             with m.State(State.INIT_R2):
                 ireg15 = Repl(init_reg[15], 3)
-                m.d.sync += o_rgb.eq(ireg15)
-                m.d.sync += init_reg.eq(init_reg.rotate_left(1))
-                m.d.sync += o_latch.eq(Repl(latch_counter[-1], 2))
-                m.d.sync += latch_counter.eq(latch_counter - 1)
-                m.d.sync += o_sclk.eq(0b10)
                 m.d.sync += counter.eq(counter + 1)
+                m.d.sync += init_reg.eq(init_reg.rotate_left(1))
+                m.d.sync += latch_counter.eq(latch_counter - 1)
+                m.d.sync += o_latch.eq(Repl(latch_counter[-1], 2))
+                m.d.sync += o_rgb.eq(ireg15)
+                m.d.sync += o_sclk.eq(0b10)
 
                 with m.If(counter == 63):
-                    m.next = State.DONE
-            with m.State(State.DONE):
+                    m.next = State.INIT_R2_E
+            with m.State(State.INIT_R2_E):
+                m.d.sync += o_latch.eq(0b00)
                 m.d.sync += o_sclk.eq(0b00)
+                m.next = State.DONE
+            with m.State(State.DONE):
                 m.d.sync += done.eq(1)
                 m.next = State.DONE
 
@@ -146,6 +149,7 @@ class PixelScanner(Elaboratable):
 
         self.i_rgb0 = Signal(3)
         self.i_rgb1 = Signal(3)
+        self.i_start = Signal(1)
 
         self.painter_latency = painter_latency
         assert painter_latency <= 2
@@ -192,8 +196,8 @@ class PixelScanner(Elaboratable):
         y_reg = Signal(led_addr.width)
         y0 = Signal(6)
         y1 = Signal(6)
-        m.d.comb += y0.eq(Cat(y, 0))
-        m.d.comb += y1.eq(Cat(y, 1))
+        m.d.comb += y0.eq(Cat(y_reg, 0))
+        m.d.comb += y1.eq(Cat(y_reg, 1))
 
         m.d.comb += self.o_x.eq(x)
         m.d.comb += self.o_y0.eq(y0)
@@ -201,66 +205,96 @@ class PixelScanner(Elaboratable):
         m.d.comb += self.o_subframe.eq(subframe)
         m.d.comb += self.o_frame.eq(frame)
 
+        class FSMState(Enum):
+            WAIT_START = 0x0
+            START      = 0x1
+            INIT_DELAY = 0x2
+            SHIFT0     = 0x3
+            SHIFT      = 0x4
+            SHIFTE     = 0x5
+            BLANK      = 0x6
+            UNBLANK    = 0x7
+
         with m.FSM() as pixel_fsm:
-            with m.State("START"):
+            with m.State(FSMState.WAIT_START):
+                m.d.sync += blank.eq(0b11)
+                m.d.sync += latch.eq(0b00)
+                m.d.sync += sclk.eq(0b00)
+                m.d.sync += self.o_rdy.eq(0)
+                with m.If(self.i_start):
+                    m.next = FSMState.START
+                with m.Else():
+                    m.next = FSMState.WAIT_START
+            with m.State(FSMState.START):
                 m.d.sync += blank.eq(0b11)
                 m.d.sync += counter.eq(0)
                 m.d.sync += delay_counter.eq(0)
                 m.d.sync += latch.eq(0b00)
-                m.d.sync += painter_counter.eq(0)
+                # Painter counter starts at 1 because we have 1 cycle of
+                # internal latency to the outputs (due to the DFF for the
+                # address lines)
+                m.d.sync += painter_counter.eq(1)
+                m.d.sync += y_reg.eq(0)
                 m.d.sync += sclk.eq(0b00)
                 m.d.sync += self.o_rdy.eq(0)
                 if self.painter_latency == 0:
                     m.d.sync += self.o_rdy.eq(1)
-                    m.next = "SHIFT"
+                    m.next = FSMState.SHIFT
                 else:
-                    m.next = "INIT_DELAY"
-            with m.State("INIT_DELAY"):
+                    m.next = FSMState.INIT_DELAY
+            with m.State(FSMState.INIT_DELAY):
                 m.d.sync += delay_counter.eq(delay_counter + 1)
                 m.d.sync += painter_counter.eq(painter_counter + 1)
                 with m.If(delay_counter == self.painter_latency):
+                    if platform == "formal":
+                        m.d.sync += Assert(painter_counter == Past(counter, self.painter_latency + 1))
                     m.d.sync += self.o_rdy.eq(1)
                     # m.d.sync += y_reg.eq(y)
                     m.d.sync += self.o_rdy.eq(1)
-                    m.next = "SHIFT"
-            with m.State("SHIFT0"):
+                    m.next = FSMState.SHIFT
+            with m.State(FSMState.SHIFT0):
                 m.d.sync += led_rgb0.eq(self.i_rgb0)
                 m.d.sync += led_rgb1.eq(self.i_rgb1)
                 m.d.sync += counter.eq(counter + 1)
                 m.d.sync += painter_counter.eq(painter_counter + 1)
                 m.d.sync += blank.eq(0b00)
                 m.d.sync += sclk.eq(0b10)
-                m.next = "SHIFT"
-            with m.State("SHIFT"):
+                m.next = FSMState.SHIFT
+            with m.State(FSMState.SHIFT):
                 m.d.sync += led_rgb0.eq(self.i_rgb0)
                 m.d.sync += led_rgb1.eq(self.i_rgb1)
                 m.d.sync += counter.eq(counter + 1)
-                m.d.sync += painter_counter.eq(painter_counter + 1)
+                with m.If(counter[0:x.width] < self.columns - 2 - self.painter_latency):
+                    m.d.sync += painter_counter.eq(painter_counter + 1)
                 m.d.sync += sclk.eq(0b10)
+                m.d.sync += blank.eq(0b00)
                 with m.If(counter[0:x.width] == self.columns - 2):
-                    m.next = "SHIFTE"
-            with m.State("SHIFTE"):
+                    m.next = FSMState.SHIFTE
+            with m.State(FSMState.SHIFTE):
                 m.d.sync += led_rgb0.eq(self.i_rgb0)
                 m.d.sync += led_rgb1.eq(self.i_rgb1)
-                # m.d.sync += y_reg.eq(y)
+                m.d.sync += y_reg.eq(y)
                 m.d.sync += blank.eq(0b01)
-                m.next = "BLANK"
-            with m.State("BLANK"):
+                m.next = FSMState.BLANK
+            with m.State(FSMState.BLANK):
                 m.d.sync += led_addr_reg.eq(led_addr)
+                m.d.sync += painter_counter.eq(painter_counter + 1)
                 m.d.sync += blank.eq(0b11)
                 m.d.sync += latch.eq(0b11)
                 m.d.sync += sclk.eq(0b00);
-                m.next = "UNBLANK"
-            with m.State("UNBLANK"):
+                m.next = FSMState.UNBLANK
+            with m.State(FSMState.UNBLANK):
                 m.d.sync += counter.eq(counter + 1)
                 m.d.sync += painter_counter.eq(painter_counter + 1)
                 m.d.sync += blank.eq(0b10)
                 m.d.sync += latch.eq(0b00)
-                m.next = "SHIFT0"
+                m.next = FSMState.SHIFT0
 
+        # Some formal properties that we just assume
         if platform == "formal":
-            with m.If(Initial()):
-                m.d.comb += Assume(pixel_fsm.ongoing("START"))
+            pass
+            # with m.If(pixel_fsm.ongoing(FSMState.SHIFT)):
+            #     m.d.sync += Assume(painter_counter == Past(counter, self.painter_latency + 1))
 
         m.d.comb += self.o_rgb0.eq(led_rgb0)
         m.d.comb += self.o_rgb1.eq(led_rgb1)
@@ -273,14 +307,9 @@ class PixelScanner(Elaboratable):
 
 class PanelDriver(Elaboratable):
     def __init__(self, painter_latency, bpp=8):
+        self.painter_latency = painter_latency
         self.columns = 64       # TODO: make generic
         self.bpp = 8
-
-        self.o_pix = Signal(PanelMux.PANEL_WIDTH)
-        self.pix = PixelScanner(painter_latency, bpp)
-
-        o_startup = Signal(PanelMux.PANEL_WIDTH)
-        self.startup = FM6126StartupDriver(o_startup)
 
         self.o_rgb0 = Signal(3)
         self.o_rgb1 = Signal(3)
@@ -289,11 +318,6 @@ class PanelDriver(Elaboratable):
         self.o_latch = Signal(2)
         self.o_sclk = Signal(2)
         self.o_rdy = Signal(1)
-
-        o = PanelSignal(self.o_rgb0, self.o_rgb1, self.o_addr, self.o_blank,
-                        self.o_latch, self.o_sclk)
-
-        self.mux = PanelMux(0, o_startup, self.o_pix, o)
 
         self.o_x  = Signal(range(self.columns))
         self.o_y0 = Signal(self.o_addr.width + 1)
@@ -304,30 +328,36 @@ class PanelDriver(Elaboratable):
         self.i_rgb0 = Signal(3)
         self.i_rgb1 = Signal(3)
 
-        assert painter_latency <= 2
-
     def elaborate(self, platform):
         m = Module()
 
-        m.submodules.pix = self.pix
-        m.submodules.startup = self.startup
-        m.submodules.mux = self.mux
+        o_pix = Signal(PanelMux.PANEL_WIDTH)
+        o_startup = Signal(PanelMux.PANEL_WIDTH)
+        o_panel = PanelSignal(self.o_rgb0, self.o_rgb1, self.o_addr, self.o_blank,
+                              self.o_latch, self.o_sclk)
 
-        m.d.comb += self.o_pix.eq(PanelSignal(
-            self.pix.o_rgb0,
-            self.pix.o_rgb1,
-            self.pix.o_addr,
-            self.pix.o_blank,
-            self.pix.o_latch,
-            self.pix.o_sclk,
+        m.submodules.pix = pix = PixelScanner(self.painter_latency, self.bpp)
+        m.submodules.startup = startup = FM6126StartupDriver(o_startup)
+        m.submodules.mux = mux = PanelMux(startup.done, o_startup, o_pix)
+
+        m.d.comb += pix.i_start.eq(startup.done)
+        m.d.comb += o_panel.eq(mux.o)
+
+        m.d.comb += o_pix.eq(PanelSignal(
+            pix.o_rgb0,
+            pix.o_rgb1,
+            pix.o_addr,
+            pix.o_blank,
+            pix.o_latch,
+            pix.o_sclk,
         ))
-        m.d.comb += self.o_rdy.eq(self.pix.o_rdy)
-        m.d.comb += self.o_x.eq(self.pix.o_x)
-        m.d.comb += self.o_y0.eq(self.pix.o_y0)
-        m.d.comb += self.o_y1.eq(self.pix.o_y1)
-        m.d.comb += self.o_frame.eq(self.pix.o_frame)
-        m.d.comb += self.o_subframe.eq(self.pix.o_subframe)
-        m.d.comb += self.pix.i_rgb0.eq(self.i_rgb0)
-        m.d.comb += self.pix.i_rgb1.eq(self.i_rgb1)
+        m.d.comb += self.o_rdy.eq(pix.o_rdy)
+        m.d.comb += self.o_x.eq(pix.o_x)
+        m.d.comb += self.o_y0.eq(pix.o_y0)
+        m.d.comb += self.o_y1.eq(pix.o_y1)
+        m.d.comb += self.o_frame.eq(pix.o_frame)
+        m.d.comb += self.o_subframe.eq(pix.o_subframe)
+        m.d.comb += pix.i_rgb0.eq(self.i_rgb0)
+        m.d.comb += pix.i_rgb1.eq(self.i_rgb1)
 
         return m
