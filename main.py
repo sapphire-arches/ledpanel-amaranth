@@ -299,6 +299,7 @@ class BoardMapping(Elaboratable):
                     i_RESETB=1,
                     i_BYPASS=0
                 )
+        platform.add_clock_constraint(cd_hsclock.clk, 30e6)
         # m.d.comb += hsclock_lock.eq(1)
         # m.d.comb += cd_hsclock.clk.eq(ClockSignal("sync"))
 
