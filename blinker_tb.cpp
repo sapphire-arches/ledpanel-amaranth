@@ -136,7 +136,7 @@ std::ostream & operator<<(std::ostream & o, Panel<Rows, Columns> & p) {
   for (size_t x = 0; x < Rows; x++) {
     o << std::setw(2) << x << " ";
     for (size_t y = 0; y < Columns; ++y) {
-      int idx = (y * 64 + x) * 3 + 1;
+      int idx = (y * 64 + x) * 3 + 0;
 
       o << std::setw(4) << int(p.brightness[idx] / div);
       if (p.brightness[idx] % div != 0) {

@@ -175,7 +175,8 @@ class PixelScanner(Elaboratable):
         sclk = Signal(2, reset=0b00)
         latch = Signal(2, reset=0b00)
 
-        delay_counter = Signal(range(self.painter_latency + 1), reset=0b00)
+        startup_delay = self.painter_latency
+        delay_counter = Signal(range(startup_delay + 1), reset=0)
 
         # Data required by painters. The painter_counter should always lead the main counter by
         x = Signal(range(self.columns))
@@ -220,6 +221,9 @@ class PixelScanner(Elaboratable):
                 m.d.sync += blank.eq(0b11)
                 m.d.sync += latch.eq(0b00)
                 m.d.sync += sclk.eq(0b00)
+                m.d.sync += counter.eq(0)
+                m.d.sync += delay_counter.eq(0)
+                m.d.sync += painter_counter.eq(0)
                 m.d.sync += self.o_rdy.eq(0)
                 with m.If(self.i_start):
                     m.next = FSMState.START
@@ -233,22 +237,17 @@ class PixelScanner(Elaboratable):
                 # Painter counter starts at 1 because we have 1 cycle of
                 # internal latency to the outputs (due to the DFF for the
                 # address lines)
-                m.d.sync += painter_counter.eq(1)
+                m.d.sync += painter_counter.eq(0)
                 m.d.sync += y_reg.eq(0)
                 m.d.sync += sclk.eq(0b00)
                 m.d.sync += self.o_rdy.eq(0)
-                if self.painter_latency == 0:
-                    m.d.sync += self.o_rdy.eq(1)
-                    m.next = FSMState.SHIFT
-                else:
-                    m.next = FSMState.INIT_DELAY
+                m.next = FSMState.SHIFT
             with m.State(FSMState.INIT_DELAY):
                 m.d.sync += delay_counter.eq(delay_counter + 1)
                 m.d.sync += painter_counter.eq(painter_counter + 1)
-                with m.If(delay_counter == self.painter_latency):
+                with m.If(delay_counter == startup_delay):
                     if platform == "formal":
-                        m.d.sync += Assert(painter_counter == Past(counter, self.painter_latency + 1))
-                    m.d.sync += self.o_rdy.eq(1)
+                        m.d.sync += Assert(counter == Past(painter_counter, self.painter_latency + 2))
                     # m.d.sync += y_reg.eq(y)
                     m.d.sync += self.o_rdy.eq(1)
                     m.next = FSMState.SHIFT
@@ -264,8 +263,7 @@ class PixelScanner(Elaboratable):
                 m.d.sync += led_rgb0.eq(self.i_rgb0)
                 m.d.sync += led_rgb1.eq(self.i_rgb1)
                 m.d.sync += counter.eq(counter + 1)
-                with m.If(counter[0:x.width] < self.columns - 2 - self.painter_latency):
-                    m.d.sync += painter_counter.eq(painter_counter + 1)
+                m.d.sync += painter_counter.eq(painter_counter + 1)
                 m.d.sync += sclk.eq(0b10)
                 m.d.sync += blank.eq(0b00)
                 with m.If(counter[0:x.width] == self.columns - 2):
@@ -273,12 +271,11 @@ class PixelScanner(Elaboratable):
             with m.State(FSMState.SHIFTE):
                 m.d.sync += led_rgb0.eq(self.i_rgb0)
                 m.d.sync += led_rgb1.eq(self.i_rgb1)
-                m.d.sync += y_reg.eq(y)
+                m.d.sync += y_reg.eq((y + 1)[0:5])
                 m.d.sync += blank.eq(0b01)
                 m.next = FSMState.BLANK
             with m.State(FSMState.BLANK):
                 m.d.sync += led_addr_reg.eq(led_addr)
-                m.d.sync += painter_counter.eq(painter_counter + 1)
                 m.d.sync += blank.eq(0b11)
                 m.d.sync += latch.eq(0b11)
                 m.d.sync += sclk.eq(0b00);
@@ -292,9 +289,10 @@ class PixelScanner(Elaboratable):
 
         # Some formal properties that we just assume
         if platform == "formal":
-            pass
-            # with m.If(pixel_fsm.ongoing(FSMState.SHIFT)):
-            #     m.d.sync += Assume(painter_counter == Past(counter, self.painter_latency + 1))
+            with m.If(self.o_sclk.any()):
+                m.d.sync += Assert(counter[0:x.width] == Past(self.o_x, self.painter_latency + 2))
+            with m.If(pixel_fsm.ongoing(FSMState.SHIFT0)):
+                m.d.sync += Assume(counter[0:x.width] == 0)
 
         m.d.comb += self.o_rgb0.eq(led_rgb0)
         m.d.comb += self.o_rgb1.eq(led_rgb1)

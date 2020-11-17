@@ -42,16 +42,12 @@ class PanelDriverOutputSpec(Elaboratable):
         pixel1 = Signal(3)
 
         m.d.comb += ResetSignal().eq(0)
-        m.d.comb += dut.i_start.eq(~Initial())
-
-        m.d.sync += pixel0.eq(AnyConst(3))
-        m.d.sync += pixel1.eq(AnyConst(3))
-
-        m.d.comb += dut.i_rgb0.eq(pixel0)
-        m.d.comb += dut.i_rgb1.eq(pixel1)
+        # m.d.b += dut.i_rgb0.eq(dut.o_y0[0:3])
 
         with m.If(dut.o_sclk.any()):
-            m.d.sync += Assert(Past(dut.o_y0, self.test_latency + 1)[0:5] == dut.o_addr)
+            m.d.sync += Assert(Past(dut.o_y0, self.test_latency + 2)[0:5] == dut.o_addr)
+            m.d.sync += Assert(Past(dut.i_rgb0, 1) == dut.o_rgb0)
+            m.d.sync += Assert(Past(dut.i_rgb1, 1) == dut.o_rgb1)
 
         return m
 

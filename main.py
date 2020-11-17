@@ -155,7 +155,7 @@ class CycleAddrTest(Elaboratable):
         x = self.x
         y = self.y
 
-        border_y = (y == 31) | (y == 63) # y == self.frame[0:6]
+        border_y = (y == 0) | (y == 63) # y == self.frame[0:6]
         border_x = (x == 0) | (x == 63) # x == self.frame[0:6]
         border = border_x | border_y
         x_0 = x.any() & ~((x & (x - 1)).any())
@@ -198,6 +198,24 @@ class PWM(Elaboratable):
 
         return m
 
+class LFSR(Elaboratable):
+    def __init__(self, taps, width=32):
+        self.taps = taps
+        self.o = Signal(width)
+        self.i_advance = Signal(1)
+
+    def elaborate(self, platform):
+        m = Module()
+
+        with m.If(self.i_advance):
+            feedback = Cat(
+                self.o[1:],
+                ~(self.o & self.taps).xor(),
+            )
+            m.d.sync += self.o.eq(feedback)
+
+        return m
+
 class Painter(Elaboratable):
     LATENCY = 0
 
@@ -223,6 +241,22 @@ class Painter(Elaboratable):
         is_zero_zero = (x == 0) & (y == self.frame[0:6])
         val_zero_zero = self.frame[1]
 
+        lfsrs = [
+            LFSR(0b11010000000000000000 | (1 << i))
+            for i in range(16)
+        ]
+
+        m.submodules += lfsrs
+        for i in range(16):
+            m.d.comb += lfsrs[i].i_advance.eq(
+                self.frame[2] & ~(
+                    self.frame[0:2].any() |
+                    self.subframe.any() |
+                    y[0:5].any() |
+                    x.any()
+                )
+            )
+
         # grad_pos_r = (self.x + self.frame[1:])[0:8]
         # grad_pos_g = (self.y + self.frame[1:])[0:8]
         # grad_pos_b = (self.y + self.x + self.frame[2:])[0:8]
@@ -241,13 +275,25 @@ class Painter(Elaboratable):
         # m.submodules.pwm_g = pwm_g
         # m.submodules.pwm_b = pwm_b
 
+        o_y = Signal()
+
+        with m.Switch(y[0:4]):
+            for yy in range(16):
+                with m.Case(yy):
+                    with m.Switch(x[0:5]):
+                        for xx in range(32):
+                            with m.Case(xx):
+                                m.d.comb += o_y.eq(lfsrs[yy].o[xx])
+
         d = Signal(3)
         d_ff = Signal(3)
         m.d.comb += d.eq(
                 # Repl((y == 0) & (x == self.frame[0:6]), 3)
                 Cat(
-                    (x == self.frame[1:7]),
-                    (y == self.frame[0:6]),
+                    x == 0,
+                    o_y,
+                    # (y == self.frame[0:6]) |
+                    # ((y + 13)[0:6] == self.frame[0:6]),
                     0
                 )
         )
