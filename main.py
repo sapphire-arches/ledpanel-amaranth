@@ -241,13 +241,14 @@ class Painter(Elaboratable):
         is_zero_zero = (x == 0) & (y == self.frame[0:6])
         val_zero_zero = self.frame[1]
 
+        num_lfsrs = 4
         lfsrs = [
             LFSR(0b11010000000000000000 | (1 << i))
-            for i in range(16)
+            for i in range(num_lfsrs)
         ]
 
         m.submodules += lfsrs
-        for i in range(16):
+        for i in range(num_lfsrs):
             m.d.comb += lfsrs[i].i_advance.eq(
                 self.frame[2] & ~(
                     self.frame[0:2].any() |
@@ -256,6 +257,13 @@ class Painter(Elaboratable):
                     x.any()
                 )
             )
+
+        mem = Memory(width=64, depth=64, init=[1 << i for i in range(64)])
+
+        read_port = mem.read_port()
+
+        m.d.comb += read_port.addr.eq(y)
+        m.submodules.read_port = read_port
 
         # grad_pos_r = (self.x + self.frame[1:])[0:8]
         # grad_pos_g = (self.y + self.frame[1:])[0:8]
@@ -277,13 +285,19 @@ class Painter(Elaboratable):
 
         o_y = Signal()
 
-        with m.Switch(y[0:4]):
-            for yy in range(16):
+        with m.Switch(y):
+            for yy in range(num_lfsrs):
                 with m.Case(yy):
                     with m.Switch(x[0:5]):
                         for xx in range(32):
                             with m.Case(xx):
                                 m.d.comb += o_y.eq(lfsrs[yy].o[xx])
+            for yy in range(64 - num_lfsrs):
+                with m.Case(yy + num_lfsrs):
+                    with m.Switch(x):
+                        for xx in range(64):
+                            with m.Case(xx):
+                                m.d.comb += o_y.eq(read_port.data[xx])
 
         d = Signal(3)
         d_ff = Signal(3)

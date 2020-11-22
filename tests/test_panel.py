@@ -45,7 +45,7 @@ class PanelDriverOutputSpec(Elaboratable):
         # m.d.b += dut.i_rgb0.eq(dut.o_y0[0:3])
 
         with m.If(dut.o_sclk.any()):
-            m.d.sync += Assert(Past(dut.o_y0, self.test_latency + 2)[0:5] == dut.o_addr)
+            m.d.sync += Assert(Past(dut.o_y0, self.test_latency)[0:5] == dut.o_addr)
             m.d.sync += Assert(Past(dut.i_rgb0, 1) == dut.o_rgb0)
             m.d.sync += Assert(Past(dut.i_rgb1, 1) == dut.o_rgb1)
 

@@ -152,7 +152,7 @@ class PixelScanner(Elaboratable):
         self.i_start = Signal(1)
 
         self.painter_latency = painter_latency
-        assert painter_latency <= 2
+        assert painter_latency <= 1
         assert self.bpp == 8
 
     def startup_cycles(self):
@@ -234,10 +234,7 @@ class PixelScanner(Elaboratable):
                 m.d.sync += counter.eq(0)
                 m.d.sync += delay_counter.eq(0)
                 m.d.sync += latch.eq(0b00)
-                # Painter counter starts at 1 because we have 1 cycle of
-                # internal latency to the outputs (due to the DFF for the
-                # address lines)
-                m.d.sync += painter_counter.eq(0)
+                m.d.sync += painter_counter.eq(self.painter_latency)
                 m.d.sync += y_reg.eq(0)
                 m.d.sync += sclk.eq(0b00)
                 m.d.sync += self.o_rdy.eq(0)
@@ -267,15 +264,18 @@ class PixelScanner(Elaboratable):
                 m.d.sync += sclk.eq(0b10)
                 m.d.sync += blank.eq(0b00)
                 with m.If(counter[0:x.width] == self.columns - 2):
+                    if self.painter_latency == 1:
+                        m.d.sync += y_reg.eq((y + 1)[0:5])
                     m.next = FSMState.SHIFTE
             with m.State(FSMState.SHIFTE):
                 m.d.sync += led_rgb0.eq(self.i_rgb0)
                 m.d.sync += led_rgb1.eq(self.i_rgb1)
-                m.d.sync += y_reg.eq((y + 1)[0:5])
                 m.d.sync += blank.eq(0b01)
                 m.next = FSMState.BLANK
             with m.State(FSMState.BLANK):
                 m.d.sync += led_addr_reg.eq(led_addr)
+                if self.painter_latency == 0:
+                    m.d.sync += y_reg.eq((y + 1)[0:5])
                 m.d.sync += blank.eq(0b11)
                 m.d.sync += latch.eq(0b11)
                 m.d.sync += sclk.eq(0b00);
