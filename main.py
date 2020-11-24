@@ -306,6 +306,7 @@ class Painter(Elaboratable):
                 Cat(
                     x == 0,
                     o_y,
+                    Cat(Const(0, 2), y, x)[0:8] < self.subframe,
                     # (y == self.frame[0:6]) |
                     # ((y + 13)[0:6] == self.frame[0:6]),
                     0
