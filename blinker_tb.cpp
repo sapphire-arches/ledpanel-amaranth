@@ -1,11 +1,20 @@
 #include <algorithm>
-#include <iostream>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
+#include <sstream>
+#include <limits>
 
 #include <backends/cxxrtl/cxxrtl_vcd.h>
 
 #include "./blinker.cpp"
+
+template<size_t Rows, size_t Columns>
+void write_img(const std::string & oname, const std::array<uint16_t, Rows * Columns * 3> & data) {
+  std::ofstream out(oname);
+
+  out.write(reinterpret_cast<const char*>(data.data()), data.size() * sizeof(uint32_t));
+}
 
 template<size_t Length>
 class ShiftReg {
@@ -71,7 +80,7 @@ std::ostream & operator<<(std::ostream & o, ShiftReg<Length> & sr) {
   return o;
 }
 
-template<size_t Rows, size_t Columns>
+template<size_t Rows, size_t Columns, typename Storage = uint16_t>
 class Panel {
 public:
   Panel() :
@@ -91,17 +100,26 @@ public:
     y = Columns - y - 1;
     for (int i = 0; i < 3; ++i) {
       for (size_t x = 0; x < Rows; ++x) {
-        brightness[(y * 64 + x) * 3 + i] += rows[i][x];
+        size_t idx = (y * 64 + x) * 3 + i;
+        if (brightness[idx] >= std::numeric_limits<Storage>::max() - 2) {
+          if (rows[i][x] != 0) {
+            brightness[idx] = std::numeric_limits<Storage>::max();
+          }
+        } else {
+          brightness[idx] += rows[i][x] * 2;
+        }
       }
     }
   }
 
   void on_next_frame() {
-    if ((frame < 5) ||
-        (30 <= frame && frame <= 33) ||
-        (62 <= frame && frame <= 66)
-        ) {
-      std::cout << *this << std::endl;
+    {
+      std::stringstream ss;
+      ss << "imgs/img" << std::setfill('0') << std::setw(4) << frame << ".raw";
+      write_img<Rows, Columns>(ss.str(), brightness);
+
+      uint16_t max_val = *std::max_element(brightness.begin(), brightness.end());
+      std::cout << "max brightness:" << max_val << std::endl;
     }
 
     frame++;
@@ -118,7 +136,7 @@ public:
   template<size_t R, size_t C>
   friend std::ostream & operator<<(std::ostream &, Panel<R, C> &);
 private:
-  std::array<uint32_t, Rows * Columns * 3> brightness;
+  std::array<Storage, Rows * Columns * 3> brightness;
 };
 
 template<size_t Rows, size_t Columns>
@@ -186,7 +204,7 @@ int main(int argc, const char ** argv) {
   uint32_t addr = uint32_t(-1);
   uint32_t subframe = uint32_t(-1);
   uint32_t o_rdy_high = 0;
-  while (top.p_o__frame.get<uint32_t>() < 3) {
+  while (top.p_o__frame.get<uint32_t>() < 15) {
     top.p_clk.set<bool>(true);
     top.step();
 
@@ -208,6 +226,7 @@ int main(int argc, const char ** argv) {
     }
 
     if (frame != last_frame) {
+      std::cout << "Process frame: " << std::setw(5) << frame << std::endl;
       panel.frame = frame;
       panel.on_next_frame();
     }

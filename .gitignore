@@ -5,3 +5,4 @@ blinker_tb
 build/*
 **/__pycache__/*
 tests/spec_*/*
+imgs/*
