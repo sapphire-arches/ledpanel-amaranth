@@ -216,13 +216,46 @@ class LFSR(Elaboratable):
 
         return m
 
+class Framebuffer(Elaboratable):
+    def __init__(self):
+        self.r_addr = Signal(range(64 * 32), reset_less=True)
+        self.r_data = Signal(24, reset_less=True)
+
+        self.w_addr = Signal(range(64 * 32), reset_less=True)
+        self.w_data = Signal(24, reset_less=True)
+        self.w_enable = Signal(3, reset_less=True)
+
+    def elaborate(self, platform):
+        import random
+
+        random.seed(0)
+        m = Module()
+
+        mem = Memory(width=self.r_data.width, depth=64*32, init=[
+            random.randint(0, 1 << 24 - 1) for _ in range(64*32)
+        ])
+
+        m.submodules.read_port = read_port = mem.read_port()
+        m.submodules.write_port = write_port = mem.write_port(granularity=self.w_enable.width)
+
+        m.d.comb += read_port.addr.eq(self.r_addr)
+        m.d.comb += self.r_data.eq(read_port.data)
+
+        m.d.comb += write_port.addr.eq(self.w_addr)
+        m.d.comb += write_port.data.eq(self.w_data)
+        m.d.comb += write_port.en.eq(self.w_enable)
+
+        return m
+
 class Painter(Elaboratable):
     LATENCY = 0
 
-    def __init__(self, driver, side):
+    def __init__(self, driver, side, framebuffer):
         self.x = driver.o_x
         self.frame = driver.o_frame
         self.subframe = driver.o_subframe
+        self.framebuffer = framebuffer
+        self.side = side
         if side == 0:
             self.y = driver.o_y0
             self.o_rgb = driver.i_rgb0
@@ -241,79 +274,19 @@ class Painter(Elaboratable):
         is_zero_zero = (x == 0) & (y == self.frame[0:6])
         val_zero_zero = self.frame[1]
 
-        num_lfsrs = 4
-        lfsrs = [
-            LFSR(0b11010000000000000000 | (1 << i))
-            for i in range(num_lfsrs)
-        ]
+        rgb8 = Signal(24)
 
-        m.submodules += lfsrs
-        for i in range(num_lfsrs):
-            m.d.comb += lfsrs[i].i_advance.eq(
-                self.frame[2] & ~(
-                    self.frame[0:2].any() |
-                    self.subframe.any() |
-                    y[0:5].any() |
-                    x.any()
-                )
-            )
+        m.submodules.pwm_r = pwm_r = PWM(rgb8[ 0: 8], self.subframe)
+        m.submodules.pwm_g = pwm_g = PWM(rgb8[ 8:16], self.subframe)
+        m.submodules.pwm_b = pwm_b = PWM(rgb8[16:24], self.subframe)
 
-        mem = Memory(width=64, depth=64, init=[1 << i for i in range(64)])
+        m.d.comb += self.framebuffer.r_addr.eq(Cat(x, y)[0:11])
+        m.d.comb += rgb8.eq(self.framebuffer.r_data)
 
-        read_port = mem.read_port()
+        rgb = Signal(3)
 
-        m.d.comb += read_port.addr.eq(y)
-        m.submodules.read_port = read_port
-
-        # grad_pos_r = (self.x + self.frame[1:])[0:8]
-        # grad_pos_g = (self.y + self.frame[1:])[0:8]
-        # grad_pos_b = (self.y + self.x + self.frame[2:])[0:8]
-        # pwm_r = PWM(grad_pos_r, self.subframe)
-        # pwm_g = PWM(grad_pos_g, self.subframe)
-        # pwm_b = PWM(grad_pos_b, self.subframe)
-
-        # rgb = Signal(3)
-        # rgb_ff = Signal(3)
-        # m.d.comb += rgb.eq(
-        #         Cat(Mux(is_zero_zero, val_zero_zero, pwm_r.o_bit), pwm_g.o_bit, pwm_b.o_bit) & Repl(x[2] & y[2], 3))
-        # m.d.sync += rgb_ff.eq(rgb)
-        # m.d.comb += self.o_rgb.eq(rgb)
-
-        # m.submodules.pwm_r = pwm_r
-        # m.submodules.pwm_g = pwm_g
-        # m.submodules.pwm_b = pwm_b
-
-        o_y = Signal()
-
-        with m.Switch(y):
-            for yy in range(num_lfsrs):
-                with m.Case(yy):
-                    with m.Switch(x[0:5]):
-                        for xx in range(32):
-                            with m.Case(xx):
-                                m.d.comb += o_y.eq(lfsrs[yy].o[xx])
-            for yy in range(64 - num_lfsrs):
-                with m.Case(yy + num_lfsrs):
-                    with m.Switch(x):
-                        for xx in range(64):
-                            with m.Case(xx):
-                                m.d.comb += o_y.eq(read_port.data[xx])
-
-        d = Signal(3)
-        d_ff = Signal(3)
-        m.d.comb += d.eq(
-                # Repl((y == 0) & (x == self.frame[0:6]), 3)
-                Cat(
-                    x == 0,
-                    o_y,
-                    Cat(Const(0, 2), y, x)[0:8] < self.subframe,
-                    # (y == self.frame[0:6]) |
-                    # ((y + 13)[0:6] == self.frame[0:6]),
-                    0
-                )
-        )
-        m.d.sync += d_ff.eq(d)
-        m.d.comb += self.o_rgb.eq(d)
+        m.d.comb += rgb.eq(Cat(Mux(is_zero_zero, val_zero_zero, pwm_r.o_bit), pwm_g.o_bit, pwm_b.o_bit))
+        m.d.comb += self.o_rgb.eq(rgb)
 
         return m
 
@@ -402,8 +375,10 @@ class BoardMapping(Elaboratable):
             m.submodules.painter0 = dr(CycleAddrTest(TEST_CYCLES, driver, side=0))
             m.submodules.painter1 = dr(CycleAddrTest(TEST_CYCLES, driver, side=1))
         else:
-            m.submodules.painter0 = dr(Painter(driver, side=0))
-            m.submodules.painter1 = dr(Painter(driver, side=1))
+            m.submodules.framebuffer0 = framebuffer0 = dr(Framebuffer())
+            m.submodules.painter0 = dr(Painter(driver, side=0, framebuffer=framebuffer0))
+            m.submodules.framebuffer1 = framebuffer1 = dr(Framebuffer())
+            m.submodules.painter1 = dr(Painter(driver, side=1, framebuffer=framebuffer1))
 
         return m
 
