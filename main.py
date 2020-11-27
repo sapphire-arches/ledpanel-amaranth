@@ -228,22 +228,31 @@ class Framebuffer(Elaboratable):
     def elaborate(self, platform):
         import random
 
-        random.seed(0)
         m = Module()
 
-        mem = Memory(width=self.r_data.width, depth=64*32, init=[
-            random.randint(0, 1 << 24 - 1) for _ in range(64*32)
-        ])
+        # RGB image planes
+        for i in range(3):
+            random.seed(0)
 
-        m.submodules.read_port = read_port = mem.read_port()
-        m.submodules.write_port = write_port = mem.write_port(granularity=self.w_enable.width)
+            # green plane is always on
+            off_color = 0x00
+            if i == 1:
+                off_color = 0x7f
 
-        m.d.comb += read_port.addr.eq(self.r_addr)
-        m.d.comb += self.r_data.eq(read_port.data)
+            mem = Memory(width=8, depth=64 * 32, init=[
+                (i // 8) for i in range(64 * 32)
+            ])
 
-        m.d.comb += write_port.addr.eq(self.w_addr)
-        m.d.comb += write_port.data.eq(self.w_data)
-        m.d.comb += write_port.en.eq(self.w_enable)
+            read_port = mem.read_port()
+            m.submodules += read_port
+            m.d.comb += read_port.addr.eq(self.r_addr)
+            m.d.comb += self.r_data[(i * 8):(i + 1) * 8].eq(read_port.data)
+
+            write_port = mem.write_port()
+            m.submodules += write_port
+            m.d.comb += write_port.addr.eq(self.w_addr)
+            m.d.comb += write_port.data.eq(self.w_data[(i * 8):(i + 1) * 8])
+            m.d.comb += write_port.en.eq(self.w_enable)
 
         return m
 
