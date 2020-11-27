@@ -330,6 +330,7 @@ class BoardMapping(Elaboratable):
         cd_hsclock = ClockDomain()
         m.domains += cd_hsclock
 
+        hsclock_lock_o = Signal()
         hsclock_lock = Signal()
 
         # Configure a PLL40 module for 30MHz operation
@@ -341,11 +342,12 @@ class BoardMapping(Elaboratable):
                     p_FILTER_RANGE=0b001,
                     i_PACKAGEPIN=platform.request("clk12"),
                     o_PLLOUTCORE=cd_hsclock.clk,
-                    o_LOCK=hsclock_lock,
+                    o_LOCK=hsclock_lock_o,
                     i_RESETB=1,
                     i_BYPASS=0
                 )
         platform.add_clock_constraint(cd_hsclock.clk, 30e6)
+        m.d.sync += hsclock_lock.eq(hsclock_lock_o)
         # m.d.comb += hsclock_lock.eq(1)
         # m.d.comb += cd_hsclock.clk.eq(ClockSignal("sync"))
 
