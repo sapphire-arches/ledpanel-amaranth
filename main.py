@@ -240,7 +240,7 @@ class Framebuffer(Elaboratable):
                 off_color = 0x7f
 
             mem = Memory(width=8, depth=64 * 32, init=[
-                (i // 8) for i in range(64 * 32)
+                0x7f if (i % 2) == 0 else 0 for i in range(64 * 32)
             ])
 
             read_port = mem.read_port()
@@ -290,6 +290,9 @@ class Painter(Elaboratable):
         m.submodules.pwm_b = pwm_b = PWM(rgb8[16:24], self.subframe)
 
         m.d.comb += self.framebuffer.r_addr.eq(Cat(x, y)[0:11])
+        m.d.comb += self.framebuffer.w_addr.eq(Cat((x + 1)[0:6], y)[0:11])
+        m.d.comb += self.framebuffer.w_data.eq(rgb8)
+        m.d.comb += self.framebuffer.w_enable.eq(1)
         m.d.comb += rgb8.eq(self.framebuffer.r_data)
 
         rgb = Signal(3)
@@ -385,8 +388,8 @@ class BoardMapping(Elaboratable):
             m.submodules.painter1 = dr(CycleAddrTest(TEST_CYCLES, driver, side=1))
         else:
             m.submodules.framebuffer0 = framebuffer0 = dr(Framebuffer())
-            m.submodules.painter0 = dr(Painter(driver, side=0, framebuffer=framebuffer0))
             m.submodules.framebuffer1 = framebuffer1 = dr(Framebuffer())
+            m.submodules.painter0 = dr(Painter(driver, side=0, framebuffer=framebuffer0))
             m.submodules.painter1 = dr(Painter(driver, side=1, framebuffer=framebuffer1))
 
         return m
@@ -412,8 +415,10 @@ if __name__ == "__main__":
             painter1 = CycleAddrTest(TEST_CYCLES, driver, side=1)
         else:
             driver = PanelDriver(Painter.LATENCY)
-            painter0 = Painter(driver, side=0)
-            painter1 = Painter(driver, side=1)
+            m.submodules.framebuffer0 = framebuffer0 = Framebuffer()
+            m.submodules.framebuffer1 = framebuffer1 = Framebuffer()
+            painter0 = Painter(driver, side=0, framebuffer=framebuffer0)
+            painter1 = Painter(driver, side=1, framebuffer=framebuffer1)
 
         m.submodules.driver = driver
         m.submodules.painter0 = painter0
