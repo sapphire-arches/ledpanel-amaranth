@@ -22,3 +22,12 @@ waves.vcd : blinker_tb
 
 sequence.webm : $(IMAGES)
 	ffmpeg -r 30 -f image2 -s 64x64 -i imgs/img%04d.png $@
+
+top_icebreaker.v : $(PYTHON_SOURCES)
+	python main.py verilog
+
+build/verilator-sim.v : top_testbench.v top_icebreaker.v
+	iverilog -o $@ $^ $$(yosys-config --datdir/ice40/cells_sim.v)
+
+verilator-sim.vcd : build/verilator-sim.v
+	./build/verilator-sim.v

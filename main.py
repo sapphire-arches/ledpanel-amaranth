@@ -303,8 +303,8 @@ class Painter(Elaboratable):
         return m
 
 class BoardMapping(Elaboratable):
-    def __init__(self):
-        pass
+    def __init__(self, for_verilator: bool):
+        self.for_verilator = for_verilator
 
     def elaborate(self, platform):
         m = Module()
@@ -333,23 +333,26 @@ class BoardMapping(Elaboratable):
         hsclock_lock_o = Signal()
         hsclock_lock = Signal()
 
-        # Configure a PLL40 module for 30MHz operation
-        m.submodules += Instance("SB_PLL40_PAD",
-                    p_FEEDBACK_PATH="SIMPLE",
-                    p_DIVR=0b0000,
-                    p_DIVF=0b1001111,
-                    p_DIVQ=0b101,
-                    p_FILTER_RANGE=0b001,
-                    i_PACKAGEPIN=platform.request("clk12"),
-                    o_PLLOUTCORE=cd_hsclock.clk,
-                    o_LOCK=hsclock_lock_o,
-                    i_RESETB=1,
-                    i_BYPASS=0
-                )
-        platform.add_clock_constraint(cd_hsclock.clk, 30e6)
-        m.d.sync += hsclock_lock.eq(hsclock_lock_o)
-        # m.d.comb += hsclock_lock.eq(1)
-        # m.d.comb += cd_hsclock.clk.eq(ClockSignal("sync"))
+        # Configure a PLL40 module for 30MHz operation, except in simulation
+        # mode where we just juse the regular sync clock
+        if self.for_verilator:
+            m.d.comb += hsclock_lock.eq(1)
+            m.d.comb += cd_hsclock.clk.eq(ClockSignal("sync"))
+        else:
+            m.submodules += Instance("SB_PLL40_PAD",
+                        p_FEEDBACK_PATH="SIMPLE",
+                        p_DIVR=0b0000,
+                        p_DIVF=0b1001111,
+                        p_DIVQ=0b101,
+                        p_FILTER_RANGE=0b001,
+                        i_PACKAGEPIN=platform.request("clk12"),
+                        o_PLLOUTCORE=cd_hsclock.clk,
+                        o_LOCK=hsclock_lock_o,
+                        i_RESETB=1,
+                        i_BYPASS=0
+                    )
+            platform.add_clock_constraint(cd_hsclock.clk, 30e6)
+            m.d.sync += hsclock_lock.eq(hsclock_lock_o)
 
         # Add a register for the RGB outputs and addrs to synchronize with the DDR outputs
         delay_sigs = Cat(driver.o_rgb0, driver.o_rgb1, driver.o_addr)
@@ -402,6 +405,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     p_action = parser.add_subparsers(dest="action")
     p_action.add_parser("simulate")
+    p_action.add_parser("verilog")
     p_action.add_parser("program")
 
     args = parser.parse_args()
@@ -440,9 +444,14 @@ if __name__ == "__main__":
 
         with open('blinker.cpp', 'w') as outf:
             outf.write(cxxrtl.convert(m, ports=ports))
-    if args.action == "program":
-        from nmigen_boards.icebreaker import *
+    else:
         p = ICEBreakerPlatformCustom()
         p.add_resources(p.break_off_pmod)
         p.add_resources(p.led_panel_pmod)
-        p.build(BoardMapping(), do_program=True)
+
+        if args.action == "program":
+            p.build(BoardMapping(False), do_program=True)
+        elif args.action == "verilog":
+            from nmigen.back import verilog
+            with open('top_icebreaker.v', 'w') as outf:
+                outf.write(verilog.convert(BoardMapping(True), platform=p, ports=[ClockSignal(), ResetSignal()]))
