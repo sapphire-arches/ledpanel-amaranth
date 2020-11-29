@@ -231,8 +231,8 @@ class Framebuffer(Elaboratable):
         m = Module()
 
         # RGB image planes
+        random.seed(0)
         for i in range(3):
-            random.seed(0)
 
             # green plane is always on
             off_color = 0x00
@@ -240,7 +240,7 @@ class Framebuffer(Elaboratable):
                 off_color = 0x7f
 
             mem = Memory(width=8, depth=64 * 32, init=[
-                0x7f if (i % 2) == 0 else 0 for i in range(64 * 32)
+                random.randint(0, 255) for _ in range(64 * 32)
             ])
 
             read_port = mem.read_port()
