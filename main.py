@@ -6,6 +6,7 @@ from nmigen_boards.resources import *
 import argparse
 import os
 import subprocess
+from typing import Optional
 
 # range 0-2, 3 means use the fancy painter
 TEST_CYCLES = 3
@@ -260,6 +261,7 @@ class Painter(Elaboratable):
     LATENCY = 0
 
     def __init__(self, driver, side, framebuffer):
+        self.driver = driver
         self.x = driver.o_x
         self.frame = driver.o_frame
         self.subframe = driver.o_subframe
@@ -280,9 +282,14 @@ class Painter(Elaboratable):
         x = self.x
         y = self.y
 
-        is_zero_zero = (x == 0) & (y == self.frame[0:6])
-        val_zero_zero = self.frame[1]
+        # Defaults
+        m.d.comb += self.framebuffer.w_enable.eq(0)
 
+        # heartbeat tracer drop
+        is_zero_zero = (x == 0)
+        val_zero_zero = 1 # self.frame[1]
+
+        # Framebuffer readback
         rgb8 = Signal(24)
 
         m.submodules.pwm_r = pwm_r = PWM(rgb8[ 0: 8], self.subframe)
@@ -290,17 +297,119 @@ class Painter(Elaboratable):
         m.submodules.pwm_b = pwm_b = PWM(rgb8[16:24], self.subframe)
 
         m.d.comb += self.framebuffer.r_addr.eq(Cat(x, y)[0:11])
-        m.d.comb += self.framebuffer.w_addr.eq(Cat((x + 1)[0:6], y)[0:11])
-        m.d.comb += self.framebuffer.w_data.eq(rgb8)
-        m.d.comb += self.framebuffer.w_enable.eq(1)
         m.d.comb += rgb8.eq(self.framebuffer.r_data)
 
+        # sim ram -> framebuffer blitter data
+        pos_counter = Signal(range(64 * 32))
+
+        # Simulation data
+        m.submodules.sim_ram = sim_ram = SinglePortMemory()
+        sim_running = Signal()
+        sim_location = Signal(range(64 * 64))
+
+        with m.If(sim_running):
+            # Simulation tick
+            m.d.comb += sim_ram.address.eq(sim_location)
+            m.d.comb += sim_ram.w_data.eq(Repl(sim_location[0:8], 2))
+            m.d.sync += sim_ram.rw.eq(1)
+            m.d.sync += sim_location.eq(sim_location + 1)
+            with m.If(sim_location == (64 * 64 - 1)):
+                m.d.sync += sim_ram.rw.eq(0)
+                m.d.sync += sim_running.eq(0)
+        with m.Else():
+            m.d.sync += sim_ram.rw.eq(0)
+            m.d.comb += sim_ram.address.eq(pos_counter)
+
+            # framebuffer write
+            with m.If(self.driver.o_unbuffered_blank.matches('1-')):
+                m.d.sync += pos_counter.eq(pos_counter + 1)
+                m.d.comb += self.framebuffer.w_addr.eq(pos_counter)
+                m.d.comb += self.framebuffer.w_data.eq(sim_ram.r_data)
+                m.d.comb += self.framebuffer.w_enable.eq(1)
+            with m.If(pos_counter == 0):
+                m.d.sync += sim_running.eq(1)
+                m.d.sync += sim_location.eq(0)
+                m.d.sync += sim_ram.rw.eq(1)
+
+        # output colors to the scanner
         rgb = Signal(3)
 
-        m.d.comb += rgb.eq(Cat(Mux(is_zero_zero, val_zero_zero, pwm_r.o_bit), pwm_g.o_bit, pwm_b.o_bit))
+        m.d.comb += rgb.eq(Mux(is_zero_zero,
+                Cat(val_zero_zero, sim_running, 0),
+                Cat(pwm_r.o_bit, pwm_g.o_bit, pwm_b.o_bit)
+            ))
         m.d.comb += self.o_rgb.eq(rgb)
 
         return m
+
+class SinglePortMemory(Elaboratable):
+    """ Memory blocks for the simulation
+
+    Attributes
+    ----------
+    address : Signal(64 * 64), in
+        Address to modify
+    w_data : Signal(16), in
+        Data to write. Written to the memory at ``address`` when ``rw`` is high.
+    r_data : Signal(16), out
+        Data from the memory. Only valid when ``rw`` is low.
+    rw : Signal(1), in
+        When 0b1, perform a write. Otherwise read data is valid.
+    """
+
+    def __init__(self):
+        self.address = Signal(14)
+        self.w_data = Signal(16)
+        self.r_data = Signal(16)
+        self.rw = Signal(1)
+
+    def elaborate(self, platform):
+        m = Module()
+
+        if platform is None or platform == "formal":
+            self.elaborate_sim(m, platform)
+        else:
+            self.elaborate_icebreaker(m, platform)
+
+        return m
+
+    def elaborate_sim(self, m: Module, platform: Optional[str]):
+        mem_depth = 1 << 14
+        memory = Memory(width=16, depth=mem_depth, init=[0 for _ in range(mem_depth)])
+
+        m.submodules.rp = rp = memory.read_port()
+
+        addr_reg = Signal.like(self.address)
+        w_data_reg = Signal.like(self.w_data)
+
+        m.d.sync += addr_reg.eq(self.address)
+        m.d.sync += w_data_reg.eq(self.w_data)
+
+        m.d.comb += rp.addr.eq(addr_reg)
+        m.d.comb += self.r_data.eq(rp.data)
+
+        m.submodules.wp = wp = memory.write_port()
+
+        m.d.comb += [
+            wp.addr.eq(addr_reg),
+            wp.data.eq(w_data_reg),
+            wp.en.eq(self.rw),
+        ]
+        return m
+
+    def elaborate_icebreaker(self, m: Module, platform: ICEBreakerPlatformCustom):
+        m.submodules += Instance("SB_SPRAM256KA",
+            i_ADDRESS=self.address,
+            i_DATAIN=self.w_data,
+            o_DATAOUT=self.r_data,
+            i_CHIPSELECT=1,
+            i_WREN=self.rw,
+            i_CLOCK=ClockSignal(),
+            i_POWEROFF=~ResetSignal(),
+            i_MASKWREN=0b1111,
+            i_SLEEP=0,
+            i_STANDBY=0,
+        )
 
 class BoardMapping(Elaboratable):
     def __init__(self, for_verilator: bool):

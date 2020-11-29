@@ -274,6 +274,7 @@ class PanelDriver(Elaboratable):
         self.o_y1 = Signal(self.o_addr.width + 1)
         self.o_frame = Signal(12)
         self.o_subframe = Signal(self.bpp)
+        self.o_unbuffered_blank = Signal(2)
 
         self.i_rgb0 = Signal(3)
         self.i_rgb1 = Signal(3)
@@ -319,5 +320,6 @@ class PanelDriver(Elaboratable):
         m.d.comb += self.o_y1.eq(pix.o_y1)
         m.d.comb += self.o_frame.eq(pix.o_frame)
         m.d.comb += self.o_subframe.eq(pix.o_subframe)
+        m.d.comb += self.o_unbuffered_blank.eq(pix.o_blank)
 
         return m
