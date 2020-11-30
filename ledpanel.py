@@ -279,6 +279,20 @@ class PanelDriver(Elaboratable):
         self.i_rgb0 = Signal(3)
         self.i_rgb1 = Signal(3)
 
+    def panel_output_ports(self):
+        return [
+            self.o_frame,
+            self.o_subframe,
+            self.o_rgb0,
+            self.o_rgb1,
+            self.o_sclk,
+            self.o_addr,
+            self.o_blank,
+            self.o_latch,
+            self.o_rdy,
+        ]
+
+
     def elaborate(self, platform):
         m = Module()
 
