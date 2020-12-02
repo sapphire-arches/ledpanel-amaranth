@@ -31,6 +31,7 @@ class PWM(Elaboratable):
         m.d.comb += [rev[rev.width - i - 1].eq(self.subframe[i]) for i in range(rev.width)]
 
         m.d.comb += self.o_bit.eq(self.v > rev)
+        # m.d.comb += self.o_bit.eq(self.v[0])
 
         return m
 

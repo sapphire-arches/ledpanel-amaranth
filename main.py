@@ -3,7 +3,7 @@ from nmigen import *
 from nmigen.build import *
 from platform.icebreaker import ICEBreakerPlatformCustom, PLL40, SinglePortMemory
 from painters.address_test import CycleAddrTest
-from painters.fluid_sim import Painter, Framebuffer
+from painters.fluid_sim import Painter, Framebuffer, FluidSim
 import argparse
 from typing import Optional
 
@@ -93,6 +93,7 @@ class HighSpeedLogic(Elaboratable):
             m.submodules.framebuffer1 = framebuffer1 = Framebuffer()
             painter0 = Painter(driver, side=0, framebuffer=framebuffer0)
             painter1 = Painter(driver, side=1, framebuffer=framebuffer1)
+            m.submodules.fluidsim = FluidSim(painter0, painter1)
 
         m.submodules.driver = driver
         m.submodules.painter0 = painter0
@@ -175,26 +176,31 @@ if __name__ == "__main__":
     p_action.add_parser("program")
 
     args = parser.parse_args()
+
+    p = ICEBreakerPlatformCustom()
+    p.add_resources(p.break_off_pmod)
+    p.add_resources(p.led_panel_pmod)
+
     if args.action == "simulate":
         from nmigen.back import cxxrtl
         clk_freq = 1e6
 
         m = Module()
 
+        with open('/home/bob_twinkles/Code/fpga/tools-venv/share/yosys/ice40/cells_sim.v') as cells_sim:
+            p.add_file('cells-sim.v', cells_sim)
+
         m.submodules.logic = logic = HighSpeedLogic()
 
         ports = logic.ports()
 
         with open('blinker.cpp', 'w') as outf:
-            outf.write(cxxrtl.convert(m, ports=ports))
-    else:
-        p = ICEBreakerPlatformCustom()
-        p.add_resources(p.break_off_pmod)
-        p.add_resources(p.led_panel_pmod)
+            outf.write(cxxrtl.convert(m, platform=p, ports=ports))
 
-        if args.action == "program":
-            p.build(BoardMapping(False), do_program=True)
-        elif args.action == "verilog":
-            from nmigen.back import verilog
-            with open('top_icebreaker.v', 'w') as outf:
-                outf.write(verilog.convert(BoardMapping(True), platform=p, ports=[ClockSignal(), ResetSignal()]))
+    if args.action == "program":
+        p.build(BoardMapping(False), do_program=True)
+
+    if args.action == "verilog":
+        from nmigen.back import verilog
+        with open('top_icebreaker.v', 'w') as outf:
+            outf.write(verilog.convert(BoardMapping(True), platform=p, ports=[ClockSignal(), ResetSignal()]))
