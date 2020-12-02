@@ -1,4 +1,4 @@
-PYTHON_SOURCES = $(wildcard *.py)
+PYTHON_SOURCES = $(shell find -name '*.py')
 YOSYS_INCLUDE := $(shell yosys-config --datdir/include)
 RAW_IMAGES := $(wildcard imgs/img*.raw)
 IMAGES := $(patsubst %.raw,%.png,$(RAW_IMAGES))
@@ -17,7 +17,7 @@ blinker_tb : blinker.cpp blinker_tb.cpp
 waves.vcd : blinker_tb
 	./blinker_tb
 
-%.png : %.raw
+%.png : %.raw waves.vcd
 	convert -size 64x64 -depth 16 RGB:$<[0] -depth 8 $@
 
 sequence.webm : $(IMAGES)
