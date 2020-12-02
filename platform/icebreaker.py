@@ -147,7 +147,7 @@ class SinglePortMemory(Elaboratable):
 
     Attributes
     ----------
-    address : Signal(64 * 64), in
+    address : Signal(14), in
         Address to modify
     w_data : Signal(16), in
         Data to write. Written to the memory at ``address`` when ``rw`` is high.
@@ -166,38 +166,6 @@ class SinglePortMemory(Elaboratable):
     def elaborate(self, platform):
         m = Module()
 
-        if platform is None or platform == "formal":
-            self.elaborate_sim(m, platform)
-        else:
-            self.elaborate_icebreaker(m, platform)
-
-        return m
-
-    def elaborate_sim(self, m: Module, platform: Optional[str]):
-        mem_depth = 1 << 14
-        memory = Memory(width=16, depth=mem_depth, init=[0 for _ in range(mem_depth)])
-
-        m.submodules.rp = rp = memory.read_port()
-
-        addr_reg = Signal.like(self.address)
-        w_data_reg = Signal.like(self.w_data)
-
-        m.d.sync += addr_reg.eq(self.address)
-        m.d.sync += w_data_reg.eq(self.w_data)
-
-        m.d.comb += rp.addr.eq(addr_reg)
-        m.d.comb += self.r_data.eq(rp.data)
-
-        m.submodules.wp = wp = memory.write_port()
-
-        m.d.comb += [
-            wp.addr.eq(addr_reg),
-            wp.data.eq(w_data_reg),
-            wp.en.eq(self.rw),
-        ]
-        return m
-
-    def elaborate_icebreaker(self, m: Module, platform: ICEBreakerPlatformCustom):
         m.submodules += Instance("SB_SPRAM256KA",
             i_ADDRESS=self.address,
             i_DATAIN=self.w_data,
@@ -205,8 +173,10 @@ class SinglePortMemory(Elaboratable):
             i_CHIPSELECT=1,
             i_WREN=self.rw,
             i_CLOCK=ClockSignal(),
-            i_POWEROFF=~ResetSignal(),
+            i_POWEROFF=1,
             i_MASKWREN=0b1111,
             i_SLEEP=0,
             i_STANDBY=0,
         )
+
+        return m

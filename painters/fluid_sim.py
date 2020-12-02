@@ -170,21 +170,12 @@ class FluidSim(Elaboratable):
 
         m.submodules.ram = self.ram
 
-        # XXX: this is an extremely arbitrary hack which seems to fix SPRAM
-        # startup corruption
-        startup_cycles = 9
-        startup_counter = Signal(range(startup_cycles + 1))
         sim_counter = Signal(range(64 * 64 + 1))
 
         with m.FSM():
             with m.State("SIM_RUN_START"):
                 m.d.sync += sim_counter.eq(0)
-                m.d.sync += startup_counter.eq(0)
-                m.next = "WAIT_STARTUP"
-            with m.State("WAIT_STARTUP"):
-                m.d.sync += startup_counter.eq(startup_counter + 1)
-                with m.If(startup_counter == startup_cycles):
-                    m.next = "SIM_RUN"
+                m.next = "SIM_RUN"
             with m.State("SIM_RUN"):
                 m.d.comb += self.ram.address.eq(sim_counter)
                 # m.d.comb += self.ram.w_data.eq(Repl(Cat(sim_counter[6:12] ^ sim_counter[0:6], Const(0, 2)), 2))
