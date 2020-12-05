@@ -26,8 +26,8 @@ sequence.webm : $(IMAGES)
 top_icebreaker.v : $(PYTHON_SOURCES)
 	python main.py verilog
 
-build/verilator-sim.v : top_testbench.v top_icebreaker.v
-	iverilog -o $@ $^ $$(yosys-config --datdir/ice40/cells_sim.v)
+build/icarus-sim.v : top_testbench.v top_icebreaker.v
+	iverilog -DICE40_U -o $@ $^ $$(yosys-config --datdir/ice40/cells_sim.v)
 
-verilator-sim.vcd : build/verilator-sim.v
-	./build/verilator-sim.v
+icarus-sim.vcd : build/icarus-sim.v
+	./build/icarus-sim.v
