@@ -3,8 +3,8 @@ import random
 
 from .utils import *
 from painters.util import XORShiftRandomizer
-from nmigen import *
-from nmigen.sim import *
+from amaranth import *
+from amaranth.sim import *
 
 class XORShiftRandomizerReference:
     def __init__(self, init, a, b, c):

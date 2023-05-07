@@ -1,4 +1,4 @@
-from nmigen import *
+from amaranth import *
 
 class CycleAddrTest(Elaboratable):
     MAX_TEST_CYCLES = 2

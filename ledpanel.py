@@ -1,5 +1,5 @@
-from nmigen import *
-from nmigen.asserts import *
+from amaranth import *
+from amaranth.asserts import *
 from enum import Enum
 
 def PanelSignal(rgb0, rgb1, addr, blank, latch, sclk):

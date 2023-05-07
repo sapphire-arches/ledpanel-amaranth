@@ -1,7 +1,7 @@
 from .utils import *
-from nmigen import *
-from nmigen.sim import *
-from nmigen.asserts import *
+from amaranth import *
+from amaranth.sim import *
+from amaranth.asserts import *
 from unittest import TestCase
 
 from ledpanel import FM6126StartupDriver, PanelMux

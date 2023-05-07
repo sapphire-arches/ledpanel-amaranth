@@ -1,6 +1,6 @@
 from .utils import *
-from nmigen import *
-from nmigen.asserts import *
+from amaranth import *
+from amaranth.asserts import *
 
 from ledpanel import PixelScanner
 

@@ -1,4 +1,4 @@
-from nmigen import *
+from amaranth import *
 from .util import PWM, XORShiftRandomizer
 from platform.icebreaker import SinglePortMemory
 from ledpanel import PanelDriver
@@ -40,7 +40,7 @@ class Framebuffer(Elaboratable):
         m = Module()
 
         # RGB image planes
-        random.seed(0)
+        random.seed(3)
         plane_names = ['r', 'g', 'b']
         for i in range(3):
 

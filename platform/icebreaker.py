@@ -1,7 +1,7 @@
-from nmigen import *
-from nmigen.build import *
-from nmigen.vendor.lattice_ice40 import LatticeICE40Platform
-from nmigen_boards.resources import *
+from amaranth import *
+from amaranth.build import *
+from amaranth.vendor.lattice_ice40 import LatticeICE40Platform
+from amaranth_boards.resources import *
 from typing import Optional
 import os
 import subprocess
@@ -47,7 +47,7 @@ class ICEBreakerPlatformCustom(LatticeICE40Platform):
         ),
 
         *SPIFlashResources(0,
-            cs="16", clk="15", copi="14", cipo="17", wp="12", hold="13",
+            cs_n="16", clk="15", copi="14", cipo="17", wp_n="12", hold_n="13",
             attrs=Attrs(IO_STANDARD="SB_LVCMOS")
         ),
     ]

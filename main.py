@@ -1,6 +1,6 @@
 from ledpanel import PanelDriver
-from nmigen import *
-from nmigen.build import *
+from amaranth import *
+from amaranth.build import *
 from platform.icebreaker import ICEBreakerPlatformCustom, PLL40, SinglePortMemory
 from painters.address_test import CycleAddrTest
 from painters.fluid_sim import Painter, Framebuffer, FluidSim
@@ -182,7 +182,7 @@ if __name__ == "__main__":
     p.add_resources(p.led_panel_pmod)
 
     if args.action == "simulate":
-        from nmigen.back import cxxrtl
+        from amaranth.back import cxxrtl
         clk_freq = 1e6
 
         m = Module()
@@ -201,6 +201,6 @@ if __name__ == "__main__":
         p.build(BoardMapping(False), do_program=True)
 
     if args.action == "verilog":
-        from nmigen.back import verilog
+        from amaranth.back import verilog
         with open('top_icebreaker.v', 'w') as outf:
             outf.write(verilog.convert(BoardMapping(True), platform=p, ports=[ClockSignal(), ResetSignal()]))
