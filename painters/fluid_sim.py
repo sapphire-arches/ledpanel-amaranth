@@ -1,5 +1,5 @@
 from nmigen import *
-from .util import PWM
+from .util import PWM, XORShiftRandomizer
 from platform.icebreaker import SinglePortMemory
 from ledpanel import PanelDriver
 
@@ -121,14 +121,7 @@ class Painter(Elaboratable):
         m.submodules.pwm_b = pwm_b = PWM(rgb8[16:24], self.subframe)
 
         m.d.comb += rgb8.eq(self.framebuffer.r_data)
-        m.d.comb += self.framebuffer.r_addr.eq(Cat(x[2:], Const(0, shape=2), y[2:]))
-        # m.d.comb += self.framebuffer.r_addr.eq(Cat(x[3:], y))
-        # with m.Switch(x[0:3]):
-        #     for i in range(8):
-        #         with m.Case(i):
-        #             m.d.comb += rgb8[0 ].eq(self.framebuffer.r_data[i +  0])
-        #             m.d.comb += rgb8[8 ].eq(self.framebuffer.r_data[i +  8])
-        #             m.d.comb += rgb8[16].eq(self.framebuffer.r_data[i + 16])
+        m.d.comb += self.framebuffer.r_addr.eq(Cat(x, y))
 
         # Framebuffer write binding
         m.d.comb += [
@@ -149,6 +142,70 @@ class Painter(Elaboratable):
         return m
 
 
+class SimDoubleBuffer(Elaboratable):
+    """
+    Double buffer the simulation memory, effectively turning two single port
+    memories into a dual port memory where we write to one while reading from
+    the other (with independent address control).
+
+    Attributes
+    ----------
+    frame : Signal(1), input
+        Which frame us currently being read. The other frame is currently being
+        written.
+
+    r_address : Signal(range(64 * 64)), input
+        The read address
+    r_data : Signal(16), output
+        Data from the read address, has one cycle of latency from ``r_address``
+
+    w_address : Signal(range(64 * 64)), output
+        The write address
+    w_data : Signal(16), input
+        Data to write
+    w_enable : Signal(), input
+        Enables writes
+    """
+
+    def __init__(self):
+        self.r_address = Signal(range(64 * 64))
+        self.r_data = Signal(16)
+
+        self.w_address = Signal(range(64 * 64))
+        self.w_data = Signal(16)
+        self.w_enable = Signal()
+
+        self.frame = Signal()
+
+    def elaborate(self, platform):
+        m = Module()
+
+        rams = [SinglePortMemory(), SinglePortMemory()]
+
+        m.submodules += rams
+
+        for i in range(len(rams)):
+            m.d.comb += rams[i].rw.eq(0)
+
+        with m.Switch(self.frame):
+            for c_index in range(len(rams)):
+                c_ram = rams[c_index]
+
+                n_index = (c_index + 1) % len(rams)
+                n_ram = rams[n_index]
+                with m.Case(c_index):
+                    m.d.comb += [
+                        c_ram.address.eq(self.r_address),
+                        self.r_data.eq(c_ram.r_data),
+
+                        n_ram.address.eq(self.w_address),
+                        n_ram.w_data.eq(self.w_data),
+                        n_ram.rw.eq(self.w_enable),
+                    ]
+
+        return m
+
+
 class FluidSim(Elaboratable):
     """
     Performs fluid simulation in a buffer.
@@ -163,33 +220,58 @@ class FluidSim(Elaboratable):
         self.painter0 = painter0
         self.painter1 = painter1
         self.start = Signal()
-        self.ram = SinglePortMemory()
+        self.buffers = SimDoubleBuffer()
 
     def elaborate(self, platform):
         m = Module()
 
-        m.submodules.ram = self.ram
+        m.submodules.buffers = self.buffers
 
+        m.submodules.randomizer = randomizer = XORShiftRandomizer()
+        m.d.comb += randomizer.req.eq(1)
+
+        # Local signals
         sim_counter = Signal(range(64 * 64 + 1))
+        current_frame = Signal()
+
+        m.d.comb += self.buffers.frame.eq(current_frame)
 
         with m.FSM():
-            with m.State("SIM_RUN_START"):
+            with m.State("SIM_INIT_START"):
                 m.d.sync += sim_counter.eq(0)
-                m.next = "SIM_RUN"
-            with m.State("SIM_RUN"):
-                m.d.comb += self.ram.address.eq(sim_counter)
-                # m.d.comb += self.ram.w_data.eq(Repl(Cat(sim_counter[6:12] ^ sim_counter[0:6], Const(0, 2)), 2))
-                m.d.comb += self.ram.w_data.eq(
-                    Mux((sim_counter[0:6] == 0) | (sim_counter[6:12] == 0),
-                        0xffff, 0x0000))
-                # m.d.comb += self.ram.w_data.eq(0x0000)
-                m.d.comb += self.ram.rw.eq(1)
+                m.d.sync += current_frame.eq(0)
+                m.next = "SIM_INIT"
+            with m.State("SIM_INIT"):
+                m.d.comb += self.buffers.w_address.eq(sim_counter)
+
+                randomizer_bit_counter = Signal(range(3))
+
+                with m.Switch(randomizer_bit_counter):
+                    for i in range(3):
+                        with m.Case(i):
+                            with m.If(randomizer.o[i*2:(i+1)*2] == 0):
+                                m.d.comb += self.buffers.w_data.eq(0xffff)
+                            with m.Else():
+                                m.d.comb += self.buffers.w_data.eq(0x0000)
+
+                            if i == 2:
+                                m.d.sync += randomizer_bit_counter.eq(0)
+                            else:
+                                m.d.sync += randomizer_bit_counter.eq(i + 1)
+
+                m.d.comb += self.buffers.w_enable.eq(1)
                 m.d.sync += sim_counter.eq(sim_counter + 1)
                 with m.If(sim_counter == (64 * 64)):
-                    m.next = "SIM_DONE"
+                    m.next = "SIM_RUN_START"
+            with m.State("SIM_RUN_START"):
+                m.d.sync += sim_counter.eq(0)
+                m.d.comb += self.buffers.w_enable.eq(0)
+                m.next = "SIM_RUN_0"
+            with m.State("SIM_RUN_0"):
+                m.next = "SIM_DONE"
             with m.State("SIM_DONE"):
                 m.d.sync += sim_counter.eq(0)
-                m.d.comb += self.ram.rw.eq(0)
+                m.d.sync += current_frame.eq(1)
                 m.next = "WRITE_PAINTER0"
             with m.State("WRITE_PAINTER0"):
                 self.painter_write_phase(m, sim_counter, self.painter0, 64 * 32, "WRITE_PAINTER1")
@@ -209,12 +291,11 @@ class FluidSim(Elaboratable):
 
         # the framebuffer address must lag the simulation data address by 1
         # cycle, because the single port RAM registers its input
-        m.d.comb += self.ram.address.eq(sim_counter)
-        m.d.comb += self.ram.rw.eq(0)
-        m.d.sync += painter.fb_w_addr.eq(sim_counter[0:11])
+        m.d.comb += self.buffers.r_address.eq(sim_counter)
+        m.d.comb += painter.fb_w_addr.eq(sim_counter[0:11])
         m.d.comb += painter.fb_w_data.eq(Cat(
-            self.ram.r_data[0:8],
-            self.ram.r_data[8:16],
+            self.buffers.r_data[0:8],
+            self.buffers.r_data[8:16],
             Const(0, shape=8),
         ))
 

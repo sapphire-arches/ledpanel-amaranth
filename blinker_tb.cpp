@@ -204,7 +204,7 @@ int main(int argc, const char ** argv) {
   uint32_t addr = uint32_t(-1);
   uint32_t subframe = uint32_t(-1);
   uint32_t o_rdy_high = 0;
-  while (top.p_o__frame.get<uint32_t>() < 256) {
+  while (top.p_o__frame.get<uint32_t>() < 16) {
     top.p_clk.set<bool>(true);
     top.step();
 

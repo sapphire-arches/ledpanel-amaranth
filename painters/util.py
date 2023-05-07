@@ -53,3 +53,62 @@ class LFSR(Elaboratable):
 
         return m
 
+class XORShiftRandomizer(Elaboratable):
+    """
+    An xor-shift based randomizer.
+
+    Based on "Xorshift RNGs" by George Marsaglia, DOI 10.18637/jss.v008.i14
+
+
+    Attributes
+    ----------
+    o: Signal(64), output
+        Output value of the randomizer, changes every 3 cycles from the last
+        positive edge on the ``req`` line
+    req: Signal(), input
+        Should be pulled high when the randomizer should run
+    """
+
+    def __init__(self, init=None, a=13, b=7, c=17):
+        self.o = Signal(64)
+        self.req = Signal()
+
+        if init is None:
+            import random
+            self.init = random.randint(0, 1 << 64)
+        else:
+            self.init = init
+        self.a = a
+        self.b = b
+        self.c = c
+
+    def elaborate(self, platform):
+        m = Module()
+
+        rstate = Signal(64, reset=self.init);
+        ostate = Signal(64);
+
+        with m.FSM():
+            with m.State("WAIT_REQ"):
+                with m.If(self.req):
+                    m.next = "PH0"
+            with m.State("PH0"):
+                m.d.sync += rstate.eq((rstate << self.a) ^ rstate)
+                m.next = "PH1"
+            with m.State("PH1"):
+                m.d.sync += rstate.eq((rstate >> self.b) ^ rstate)
+                m.next = "PH2"
+            with m.State("PH2"):
+                next_state = (rstate << self.c) ^ rstate
+                m.d.sync += rstate.eq(next_state)
+                m.d.sync += ostate.eq(next_state)
+
+                with m.If(self.req):
+                    m.next = "PH0"
+                with m.Else():
+                    m.next = "WAIT_REQ"
+
+        m.d.comb += self.o.eq(ostate)
+
+
+        return m
